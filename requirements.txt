@@ -1,1 +1,7 @@
 pymupdf>=1.23.0
+paddlepaddle
+paddleocr
+pillow
+
+# Optional: For higher accuracy OCR (requires GPU)
+# pip install surya-ocr

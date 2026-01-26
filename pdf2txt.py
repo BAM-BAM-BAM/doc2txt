@@ -454,6 +454,110 @@ def check_tesseract_available() -> bool:
     return shutil.which("tesseract") is not None
 
 
+def check_paddleocr_available() -> bool:
+    """Check if PaddleOCR is available."""
+    try:
+        import paddleocr
+        return True
+    except ImportError:
+        return False
+
+
+def check_surya_available() -> bool:
+    """Check if Surya OCR is available."""
+    try:
+        import surya
+        return True
+    except ImportError:
+        return False
+
+
+# Global OCR instances (lazy-loaded)
+_paddle_ocr_instance = None
+_surya_ocr_instance = None
+
+
+def get_paddle_ocr():
+    """Get or create the global PaddleOCR instance."""
+    global _paddle_ocr_instance
+    if _paddle_ocr_instance is None:
+        from paddleocr import PaddleOCR
+        # Suppress PaddleOCR's verbose logging
+        import logging
+        logging.getLogger('ppocr').setLevel(logging.ERROR)
+        _paddle_ocr_instance = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+    return _paddle_ocr_instance
+
+
+def get_surya_ocr():
+    """Get or create the global Surya OCR models."""
+    global _surya_ocr_instance
+    if _surya_ocr_instance is None:
+        from surya.recognition import RecognitionPredictor
+        from surya.detection import DetectionPredictor
+        _surya_ocr_instance = {
+            'recognition': RecognitionPredictor(),
+            'detection': DetectionPredictor(),
+        }
+    return _surya_ocr_instance
+
+
+def ocr_page_with_paddle(page, dpi: int = 300) -> str:
+    """Extract text from a PDF page using PaddleOCR."""
+    # Render page to image
+    pix = page.get_pixmap(dpi=dpi)
+    img_data = pix.tobytes("png")
+
+    # Run PaddleOCR
+    ocr = get_paddle_ocr()
+    result = ocr.ocr(img_data, cls=True)
+
+    # Extract text from results
+    if not result or not result[0]:
+        return ""
+
+    lines = []
+    for line in result[0]:
+        if line and len(line) >= 2:
+            text = line[1][0] if isinstance(line[1], (list, tuple)) else line[1]
+            lines.append(text)
+
+    return '\n'.join(lines)
+
+
+def ocr_page_with_surya(page, dpi: int = 300) -> str:
+    """Extract text from a PDF page using Surya OCR."""
+    import io
+    from PIL import Image
+    from surya.recognition import run_recognition
+    from surya.detection import run_detection
+
+    # Render page to image
+    pix = page.get_pixmap(dpi=dpi)
+    img_data = pix.tobytes("png")
+    img = Image.open(io.BytesIO(img_data))
+
+    # Get OCR models
+    models = get_surya_ocr()
+
+    # Detect text regions
+    det_results = run_detection([img], models['detection'])
+
+    # Recognize text
+    rec_results = run_recognition([img], det_results, models['recognition'])
+
+    # Extract text from results
+    if not rec_results or not rec_results[0]:
+        return ""
+
+    lines = []
+    for text_line in rec_results[0].text_lines:
+        if text_line.text:
+            lines.append(text_line.text)
+
+    return '\n'.join(lines)
+
+
 class SuppressOutputFD:
     """Context manager to suppress stdout/stderr at the OS file descriptor level.
 
@@ -499,17 +603,46 @@ def page_has_images(page) -> bool:
 def extract_text_from_pdf(
     pdf_path: Path,
     use_ocr: bool = True,
+    ocr_engine: str = "paddle",
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None
 ) -> list[str]:
-    """Extract text from PDF, returning list of page contents."""
+    """Extract text from PDF, returning list of page contents.
+
+    Args:
+        ocr_engine: "paddle" (default), "tesseract", or "none"
+    """
     import pymupdf
 
     pages = []
     # Suppress output when HUD is active to prevent terminal corruption
     with SuppressOutputFD(suppress=(hud is not None)):
         doc = pymupdf.open(pdf_path)
-    ocr_available = check_tesseract_available() if use_ocr else False
+
+    # Determine OCR availability with fallback chain
+    if not use_ocr or ocr_engine == "none":
+        ocr_available = False
+        ocr_engine = "none"
+    elif ocr_engine == "surya":
+        ocr_available = check_surya_available()
+        if not ocr_available:
+            # Fallback to paddle, then tesseract
+            if check_paddleocr_available():
+                ocr_available = True
+                ocr_engine = "paddle"
+            elif check_tesseract_available():
+                ocr_available = True
+                ocr_engine = "tesseract"
+    elif ocr_engine == "paddle":
+        ocr_available = check_paddleocr_available()
+        if not ocr_available:
+            # Fallback to tesseract
+            ocr_available = check_tesseract_available()
+            if ocr_available:
+                ocr_engine = "tesseract"
+    else:  # tesseract
+        ocr_available = check_tesseract_available()
+
     total_pages = len(doc)
 
     if stats:
@@ -527,16 +660,22 @@ def extract_text_from_pdf(
             with SuppressOutputFD(suppress=(hud is not None)):
                 text = page.get_text().strip()
 
-            if use_ocr and ocr_available and page_has_images(page):
+            if ocr_available and page_has_images(page):
                 try:
                     if stats:
-                        stats.current_status = f"OCR page {page_num}/{total_pages}..."
+                        stats.current_status = f"OCR ({ocr_engine}) page {page_num}/{total_pages}..."
                         if hud:
                             hud.refresh()
 
                     with SuppressOutputFD(suppress=(hud is not None)):
-                        tp = page.get_textpage_ocr(full=True, language="eng")
-                        ocr_text = page.get_text(textpage=tp).strip()
+                        if ocr_engine == "surya":
+                            ocr_text = ocr_page_with_surya(page)
+                        elif ocr_engine == "paddle":
+                            ocr_text = ocr_page_with_paddle(page)
+                        else:  # tesseract
+                            tp = page.get_textpage_ocr(full=True, language="eng")
+                            ocr_text = page.get_text(textpage=tp).strip()
+
                     orig_len = len(text)
                     ocr_len = len(ocr_text)
 
@@ -545,7 +684,7 @@ def extract_text_from_pdf(
                         if stats:
                             stats.ocr_pages += 1
                             stats.ocr_chars += ocr_len
-                            stats.log(f"  OCR p{page_num}: +{ocr_len:,} chars")
+                            stats.log(f"  OCR p{page_num}: +{ocr_len:,} chars ({ocr_engine})")
                     else:
                         if stats:
                             stats.log(f"  OCR p{page_num}: kept original ({orig_len:,} chars)")
@@ -586,6 +725,7 @@ def process_pdf(
     overwrite: bool,
     dry_run: bool,
     use_ocr: bool = True,
+    ocr_engine: str = "paddle",
     improve: bool = False,
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None
@@ -604,7 +744,7 @@ def process_pdf(
 
         try:
             # Extract new version
-            pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, stats=stats, hud=hud)
+            pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, stats=stats, hud=hud)
             new_markdown = create_markdown(pdf_path, pages)
             new_text = '\n'.join(pages)
 
@@ -640,7 +780,7 @@ def process_pdf(
         return True, f"{action}: {md_path.name}", None
 
     try:
-        pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, stats=stats, hud=hud)
+        pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, stats=stats, hud=hud)
         markdown_content = create_markdown(pdf_path, pages)
         md_path.write_text(markdown_content, encoding='utf-8')
         if stats:
@@ -667,6 +807,7 @@ def process_pdf_worker(
     overwrite: bool,
     dry_run: bool,
     use_ocr: bool,
+    ocr_engine: str,
     improve: bool
 ) -> FileResult:
     """Process a single PDF in a separate process. Returns FileResult for aggregation."""
@@ -685,19 +826,47 @@ def process_pdf_worker(
     def extract_pages() -> tuple[list[str], int, int]:
         """Extract text from all pages, returning (pages, ocr_pages, ocr_chars)."""
         doc = pymupdf.open(pdf_path)
-        ocr_available = check_tesseract_available() if use_ocr else False
         pages = []
         ocr_pages_count = 0
         ocr_chars_count = 0
+
+        # Determine OCR engine to use with fallback
+        active_engine = ocr_engine
+        if not use_ocr or ocr_engine == "none":
+            ocr_available = False
+        elif ocr_engine == "surya":
+            ocr_available = check_surya_available()
+            if not ocr_available:
+                ocr_available = check_paddleocr_available()
+                if ocr_available:
+                    active_engine = "paddle"
+                else:
+                    ocr_available = check_tesseract_available()
+                    if ocr_available:
+                        active_engine = "tesseract"
+        elif ocr_engine == "paddle":
+            ocr_available = check_paddleocr_available()
+            if not ocr_available:
+                ocr_available = check_tesseract_available()
+                if ocr_available:
+                    active_engine = "tesseract"
+        else:
+            ocr_available = check_tesseract_available()
 
         try:
             for page in doc:
                 text = page.get_text().strip()
 
-                if use_ocr and ocr_available and page_has_images(page):
+                if ocr_available and page_has_images(page):
                     try:
-                        tp = page.get_textpage_ocr(full=True, language="eng")
-                        ocr_text = page.get_text(textpage=tp).strip()
+                        if active_engine == "surya":
+                            ocr_text = ocr_page_with_surya(page)
+                        elif active_engine == "paddle":
+                            ocr_text = ocr_page_with_paddle(page)
+                        else:  # tesseract
+                            tp = page.get_textpage_ocr(full=True, language="eng")
+                            ocr_text = page.get_text(textpage=tp).strip()
+
                         if len(ocr_text) > len(text):
                             text = ocr_text
                             ocr_pages_count += 1
@@ -809,7 +978,7 @@ def aggregate_result(stats: ProcessingStats, result: FileResult, improve_mode: b
         stats.processed_bytes += result.processed_bytes
 
 
-def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: int) -> int:
+def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, max_workers: int) -> int:
     """Run processing with simple text output using parallel workers."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -822,6 +991,7 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: int)
         if improve_mode:
             print("(Improve mode - comparing quality)")
         print(f"Using {max_workers} parallel workers")
+        print(f"OCR engine: {ocr_engine}")
         print()
 
     with ProcessPoolExecutor(max_workers=max_workers, mp_context=_mp_context) as executor:
@@ -832,6 +1002,7 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: int)
                 args.overwrite,
                 args.dry_run,
                 use_ocr,
+                ocr_engine,
                 improve_mode
             ): pdf_path for pdf_path in sorted(pdfs)
         }
@@ -873,7 +1044,7 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: int)
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: int) -> int:
+def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, max_workers: int) -> int:
     """Run processing with the retro HUD using parallel workers."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -896,6 +1067,7 @@ def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: in
             args.overwrite,
             args.dry_run,
             use_ocr,
+            ocr_engine,
             improve_mode
         ): pdf_path for pdf_path in sorted(pdfs)
     }
@@ -947,7 +1119,7 @@ def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, max_workers: in
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_with_hud(pdfs: list[Path], args, use_ocr: bool) -> int:
+def run_with_hud(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
     """Run processing with the retro HUD."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -970,6 +1142,7 @@ def run_with_hud(pdfs: list[Path], args, use_ocr: bool) -> int:
                 overwrite=args.overwrite,
                 dry_run=args.dry_run,
                 use_ocr=use_ocr,
+                ocr_engine=ocr_engine,
                 improve=improve_mode,
                 stats=stats,
                 hud=hud
@@ -1019,19 +1192,11 @@ def run_with_hud(pdfs: list[Path], args, use_ocr: bool) -> int:
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_simple(pdfs: list[Path], args, use_ocr: bool) -> int:
+def run_simple(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
     """Run processing with simple text output."""
-    processed = 0
-    skipped = 0
-    failed = 0
-    improved = 0
-    kept_existing = 0
-    total_bytes = 0
-    md_bytes = 0
-    total_pages = 0
-    ocr_pages = 0
-    ocr_chars = 0
-    start_time = time.time()
+    stats = ProcessingStats()
+    stats.total_files = len(pdfs)
+    stats.total_bytes = sum(p.stat().st_size for p in pdfs)
     improve_mode = getattr(args, 'improve', False)
 
     if args.verbose or args.dry_run:
@@ -1039,6 +1204,7 @@ def run_simple(pdfs: list[Path], args, use_ocr: bool) -> int:
             print("(Dry run - no files will be created)")
         if improve_mode:
             print("(Improve mode - comparing quality)")
+        print(f"OCR engine: {ocr_engine}")
         print()
 
     for pdf_path in sorted(pdfs):
@@ -1046,179 +1212,63 @@ def run_simple(pdfs: list[Path], args, use_ocr: bool) -> int:
             print(f"Processing: {pdf_path}")
 
         file_size = pdf_path.stat().st_size
-        md_path = pdf_path.with_suffix('.md')
 
-        # Improve mode: extract and compare
-        if improve_mode and md_path.exists():
-            if args.dry_run:
-                print(f"  Would compare: {md_path}")
-                processed += 1
-                total_bytes += file_size
-                continue
+        success, message, improve_detail = process_pdf(
+            pdf_path,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+            use_ocr=use_ocr,
+            ocr_engine=ocr_engine,
+            improve=improve_mode,
+            stats=stats
+        )
 
-            try:
-                import pymupdf
-                doc = pymupdf.open(pdf_path)
-                ocr_available = check_tesseract_available() if use_ocr else False
-                pages = []
-                doc_pages = len(doc)
+        if args.verbose:
+            print(f"  {message}")
+            if improve_detail:
+                print(f"     {improve_detail}")
 
-                if args.verbose:
-                    print(f"  {doc_pages} page(s)")
+        if improve_mode and "Improved:" in message:
+            stats.improved_files += 1
+            stats.processed_files += 1
+            stats.processed_bytes += file_size
+        elif improve_mode and "Kept" in message:
+            stats.kept_existing += 1
+            stats.processed_files += 1
+            stats.processed_bytes += file_size
+        elif success:
+            stats.processed_files += 1
+            stats.processed_bytes += file_size
+        elif "Skipped" in message:
+            stats.skipped_files += 1
+        else:
+            stats.failed_files += 1
 
-                for page_num, page in enumerate(doc, start=1):
-                    text = page.get_text().strip()
-
-                    if use_ocr and ocr_available and page_has_images(page):
-                        try:
-                            if args.verbose:
-                                print(f"  Page {page_num}/{doc_pages}: OCR...", end="", flush=True)
-                            tp = page.get_textpage_ocr(full=True, language="eng")
-                            ocr_text = page.get_text(textpage=tp).strip()
-                            orig_len = len(text)
-                            ocr_len = len(ocr_text)
-                            if ocr_len > orig_len:
-                                text = ocr_text
-                                ocr_pages += 1
-                                ocr_chars += ocr_len
-                                if args.verbose:
-                                    print(f" +{ocr_len:,} chars")
-                            else:
-                                if args.verbose:
-                                    print(f" kept original ({orig_len:,} chars)")
-                        except Exception as e:
-                            if args.verbose:
-                                print(f" failed - {e}")
-
-                    pages.append(text)
-                    total_pages += 1
-
-                doc.close()
-
-                new_markdown = create_markdown(pdf_path, pages)
-                new_text = '\n'.join(pages)
-
-                existing_markdown = md_path.read_text(encoding='utf-8')
-                existing_text = strip_markdown_metadata(existing_markdown)
-
-                is_better, old_metrics, new_metrics = _quality_scorer.compare(existing_text, new_text)
-
-                # Always count as processed for throughput (we did extract the PDF)
-                processed += 1
-                total_bytes += file_size
-
-                if is_better:
-                    md_path.write_text(new_markdown, encoding='utf-8')
-                    md_bytes += len(new_markdown.encode('utf-8'))
-                    improved += 1
-                    if args.verbose:
-                        print(f"  Improved: {old_metrics.total_score:.2f} → {new_metrics.total_score:.2f}")
-                    elif not args.quiet:
-                        print(f"  Improved: {pdf_path.name} ({old_metrics.total_score:.2f} → {new_metrics.total_score:.2f})")
-                else:
-                    md_bytes += md_path.stat().st_size  # Count existing file
-                    kept_existing += 1
-                    if args.verbose:
-                        print(f"  Kept existing: {old_metrics.total_score:.2f} > {new_metrics.total_score:.2f}")
-
-            except Exception as e:
-                failed += 1
-                print(f"  FAILED: {e}", file=sys.stderr)
-
-            continue
-
-        # Standard mode: skip existing unless overwrite
-        if md_path.exists() and not args.overwrite:
-            if args.verbose:
-                print(f"  Skipped (exists)")
-            skipped += 1
-            continue
-
-        if args.dry_run:
-            action = "Would overwrite" if md_path.exists() else "Would create"
-            print(f"  {action}: {md_path}")
-            processed += 1
-            total_bytes += file_size
-            continue
-
-        try:
-            import pymupdf
-            doc = pymupdf.open(pdf_path)
-            ocr_available = check_tesseract_available() if use_ocr else False
-            pages = []
-            doc_pages = len(doc)
-
-            if args.verbose:
-                print(f"  {doc_pages} page(s)")
-
-            for page_num, page in enumerate(doc, start=1):
-                text = page.get_text().strip()
-
-                if use_ocr and ocr_available and page_has_images(page):
-                    try:
-                        if args.verbose:
-                            print(f"  Page {page_num}/{doc_pages}: OCR...", end="", flush=True)
-                        tp = page.get_textpage_ocr(full=True, language="eng")
-                        ocr_text = page.get_text(textpage=tp).strip()
-                        orig_len = len(text)
-                        ocr_len = len(ocr_text)
-                        if ocr_len > orig_len:
-                            text = ocr_text
-                            ocr_pages += 1
-                            ocr_chars += ocr_len
-                            if args.verbose:
-                                print(f" +{ocr_len:,} chars")
-                        else:
-                            if args.verbose:
-                                print(f" kept original ({orig_len:,} chars)")
-                    except Exception as e:
-                        if args.verbose:
-                            print(f" failed - {e}")
-
-                pages.append(text)
-                total_pages += 1
-
-            doc.close()
-
-            markdown_content = create_markdown(pdf_path, pages)
-            md_path.write_text(markdown_content, encoding='utf-8')
-            md_bytes += len(markdown_content.encode('utf-8'))
-
-            if args.verbose:
-                print(f"  Created: {md_path}")
-
-            processed += 1
-            total_bytes += file_size
-
-        except Exception as e:
-            failed += 1
-            print(f"  FAILED: {e}", file=sys.stderr)
-
-    elapsed = time.time() - start_time
+    elapsed = stats.elapsed()
 
     if not args.quiet:
         print()
         if improve_mode:
-            print(f"Summary: {processed} processed, {improved} improved, {kept_existing} kept existing, {failed} failed")
+            print(f"Summary: {stats.processed_files} processed, {stats.improved_files} improved, {stats.kept_existing} kept existing, {stats.failed_files} failed")
         else:
-            print(f"Summary: {processed} processed, {skipped} skipped, {failed} failed")
+            print(f"Summary: {stats.processed_files} processed, {stats.skipped_files} skipped, {stats.failed_files} failed")
 
-        if args.verbose and (processed > 0 or improved > 0) and elapsed > 0:
-            total_mb = total_bytes / (1024 * 1024)
-            md_mb = md_bytes / (1024 * 1024)
-            files_per_min = (processed / elapsed) * 60 if processed > 0 else 0
+        if args.verbose and stats.processed_files > 0 and elapsed > 0:
+            total_mb = stats.processed_bytes / (1024 * 1024)
+            md_mb = stats.md_bytes / (1024 * 1024)
+            files_per_min = (stats.processed_files / elapsed) * 60
             mb_per_min = (total_mb / elapsed) * 60
-            ratio = (md_bytes / total_bytes * 100) if total_bytes > 0 else 0
+            ratio = (stats.md_bytes / stats.processed_bytes * 100) if stats.processed_bytes > 0 else 0
 
             print()
             print(f"Stats:")
             print(f"  Time elapsed:    {elapsed:.1f}s")
-            print(f"  PDF input:       {total_mb:.2f} MB ({total_pages} pages)")
+            print(f"  PDF input:       {total_mb:.2f} MB ({stats.processed_pages} pages)")
             print(f"  MD output:       {md_mb:.2f} MB ({ratio:.1f}% of input)")
             print(f"  Processing rate: {files_per_min:.1f} files/min, {mb_per_min:.2f} MB/min")
-            print(f"  OCR stats:       {ocr_pages} pages, {ocr_chars:,} chars extracted")
+            print(f"  OCR stats:       {stats.ocr_pages} pages, {stats.ocr_chars:,} chars extracted")
 
-    return 1 if failed > 0 else 0
+    return 1 if stats.failed_files > 0 else 0
 
 
 def main() -> int:
@@ -1276,7 +1326,13 @@ def main() -> int:
     parser.add_argument(
         "--no-ocr",
         action="store_true",
-        help="Disable OCR for image-based pages (OCR requires Tesseract)"
+        help="Disable OCR for image-based pages"
+    )
+    parser.add_argument(
+        "--ocr-engine",
+        choices=["paddle", "surya", "tesseract"],
+        default="paddle",
+        help="OCR engine to use (default: paddle)"
     )
     parser.add_argument(
         "-j", "--jobs",
@@ -1301,12 +1357,25 @@ def main() -> int:
 
     # Check OCR availability
     use_ocr = not args.no_ocr
-    if use_ocr and not check_tesseract_available():
-        if not args.quiet and not args.hud:
-            print("Warning: Tesseract not found. OCR disabled.", file=sys.stderr)
-            print("Install with: apt install tesseract-ocr", file=sys.stderr)
-            print()
-        use_ocr = False
+    ocr_engine = args.ocr_engine
+
+    if use_ocr:
+        # Check if requested engine is available, with fallback
+        if ocr_engine == "surya" and not check_surya_available():
+            if not args.quiet:
+                print("Warning: Surya not available, trying PaddleOCR...", file=sys.stderr)
+            ocr_engine = "paddle"
+
+        if ocr_engine == "paddle" and not check_paddleocr_available():
+            if not args.quiet:
+                print("Warning: PaddleOCR not available, trying Tesseract...", file=sys.stderr)
+            ocr_engine = "tesseract"
+
+        if ocr_engine == "tesseract" and not check_tesseract_available():
+            if not args.quiet:
+                print("Warning: No OCR engine available. OCR disabled.", file=sys.stderr)
+                print("Install with: pip install paddleocr paddlepaddle", file=sys.stderr)
+            use_ocr = False
 
     # Find PDFs
     pdfs = find_pdfs(directory, recursive=args.recursive, quiet=args.quiet)
@@ -1322,15 +1391,15 @@ def main() -> int:
     if max_workers == 1:
         # Sequential processing (original behavior)
         if args.hud and not args.dry_run:
-            return run_with_hud(pdfs, args, use_ocr)
+            return run_with_hud(pdfs, args, use_ocr, ocr_engine)
         else:
-            return run_simple(pdfs, args, use_ocr)
+            return run_simple(pdfs, args, use_ocr, ocr_engine)
     else:
         # Parallel processing
         if args.hud and not args.dry_run:
-            return run_with_hud_parallel(pdfs, args, use_ocr, max_workers)
+            return run_with_hud_parallel(pdfs, args, use_ocr, ocr_engine, max_workers)
         else:
-            return run_simple_parallel(pdfs, args, use_ocr, max_workers)
+            return run_simple_parallel(pdfs, args, use_ocr, ocr_engine, max_workers)
 
 
 if __name__ == "__main__":

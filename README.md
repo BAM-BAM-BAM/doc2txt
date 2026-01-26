@@ -5,7 +5,7 @@ Extract text from PDFs and create markdown files with OCR support and parallel p
 ## Features
 
 - **Text Extraction**: Converts PDF files to markdown format
-- **OCR Support**: Uses Tesseract to extract text from image-based pages
+- **Multiple OCR Engines**: PaddleOCR (default), Surya (high accuracy), or Tesseract
 - **Parallel Processing**: Utilizes all CPU cores for faster batch processing
 - **Quality Scoring**: `--improve` mode re-extracts and only overwrites if quality is better
 - **Retro HUD**: Optional 80's style terminal interface with progress tracking
@@ -25,9 +25,17 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Optional: Install Tesseract for OCR support
-sudo apt install tesseract-ocr
+# Optional: Install Surya for highest accuracy (requires GPU)
+pip install surya-ocr
 ```
+
+## OCR Engines
+
+| Engine | Accuracy | Speed | Requirements |
+|--------|----------|-------|--------------|
+| `paddle` (default) | ~90% | Fast | CPU or GPU |
+| `surya` | ~97% | Medium | GPU recommended |
+| `tesseract` | ~85% | Fast | System package |
 
 ## Usage
 
@@ -44,6 +52,9 @@ sudo apt install tesseract-ocr
 # Control parallel workers (default: CPU count)
 ./pdf2txt.py -r -j 8 /path/to/pdfs    # Use 8 workers
 ./pdf2txt.py -r -j 1 /path/to/pdfs    # Sequential processing
+
+# Use Surya for higher accuracy OCR
+./pdf2txt.py -r --ocr-engine surya /path/to/pdfs
 
 # Re-extract and improve existing files
 ./pdf2txt.py -r --improve /path/to/pdfs
@@ -67,6 +78,7 @@ sudo apt install tesseract-ocr
 | `-q, --quiet` | Suppress all output except errors |
 | `--hud` | Show retro 80's style HUD |
 | `-j N, --jobs N` | Number of parallel workers (default: CPU count) |
+| `--ocr-engine` | OCR engine: `paddle` (default), `surya`, or `tesseract` |
 | `-n, --dry-run` | List files without processing |
 | `-f, --force` | Overwrite existing markdown files |
 | `--improve` | Re-extract and only overwrite if better quality |
@@ -84,7 +96,8 @@ Creates a `.md` file alongside each PDF with:
 
 - Python 3.10+
 - PyMuPDF
-- Tesseract (optional, for OCR)
+- PaddleOCR (default OCR engine)
+- Pillow
 
 ## License
 
