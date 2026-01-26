@@ -1,4 +1,4 @@
-#!/home/jprior/claude/pdf2txt/.venv/bin/python
+#!/usr/bin/env python3
 """Extract text from PDFs and create corresponding markdown files."""
 
 __version__ = "1.0.0"
