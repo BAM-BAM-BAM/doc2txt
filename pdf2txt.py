@@ -500,6 +500,45 @@ def check_surya_available() -> bool:
         return False
 
 
+def clear_gpu_memory():
+    """Clear GPU memory and attempt to kill zombie CUDA processes."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception:
+        pass
+
+    # Try to identify and kill zombie GPU processes (Linux/WSL only)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-compute-apps=pid', '--format=csv,noheader'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            import os
+            import signal
+            current_pid = os.getpid()
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    try:
+                        pid = int(line.strip())
+                        # Don't kill ourselves or parent processes
+                        if pid != current_pid and pid != os.getppid():
+                            # Check if process exists but is zombie/orphaned
+                            try:
+                                os.kill(pid, 0)  # Check if exists
+                            except ProcessLookupError:
+                                # Process doesn't exist but holding GPU memory - can't do much in userspace
+                                pass
+                    except (ValueError, ProcessLookupError, PermissionError):
+                        pass
+    except Exception:
+        pass
+
+
 # Global OCR instances (lazy-loaded)
 _paddle_ocr_instance = None
 _surya_ocr_instance = None
@@ -527,6 +566,8 @@ def get_surya_ocr():
     """Get or create the global Surya OCR models."""
     global _surya_ocr_instance
     if _surya_ocr_instance is None:
+        # Clear any leftover GPU memory before loading heavy models
+        clear_gpu_memory()
         from surya.recognition import RecognitionPredictor, FoundationPredictor
         from surya.detection import DetectionPredictor
         detection = DetectionPredictor()
@@ -686,6 +727,7 @@ def extract_text_from_pdf(
     pdf_path: Path,
     use_ocr: bool = True,
     ocr_engine: str = "paddle",
+    force_ocr: bool = False,
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None
 ) -> list[str]:
@@ -742,7 +784,7 @@ def extract_text_from_pdf(
             with SuppressOutputFD(suppress=(hud is not None)):
                 text = page.get_text().strip()
 
-            if ocr_available and page_needs_ocr(page):
+            if ocr_available and (force_ocr or page_needs_ocr(page)):
                 try:
                     if stats:
                         stats.current_status = f"OCR ({ocr_engine}) page {page_num}/{total_pages}..."
@@ -808,6 +850,7 @@ def process_pdf(
     dry_run: bool,
     use_ocr: bool = True,
     ocr_engine: str = "paddle",
+    force_ocr: bool = False,
     improve: bool = False,
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None
@@ -826,7 +869,7 @@ def process_pdf(
 
         try:
             # Extract new version
-            pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, stats=stats, hud=hud)
+            pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, force_ocr=force_ocr, stats=stats, hud=hud)
             new_markdown = create_markdown(pdf_path, pages)
             new_text = '\n'.join(pages)
 
@@ -862,7 +905,7 @@ def process_pdf(
         return True, f"{action}: {md_path.name}", None
 
     try:
-        pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, stats=stats, hud=hud)
+        pages = extract_text_from_pdf(pdf_path, use_ocr=use_ocr, ocr_engine=ocr_engine, force_ocr=force_ocr, stats=stats, hud=hud)
         markdown_content = create_markdown(pdf_path, pages)
         md_path.write_text(markdown_content, encoding='utf-8')
         if stats:
@@ -890,6 +933,7 @@ def process_pdf_worker(
     dry_run: bool,
     use_ocr: bool,
     ocr_engine: str,
+    force_ocr: bool,
     improve: bool
 ) -> FileResult:
     """Process a single PDF in a separate process. Returns FileResult for aggregation."""
@@ -958,7 +1002,7 @@ def process_pdf_worker(
             for page_num, page in enumerate(doc, start=1):
                 text = page.get_text().strip()
 
-                if ocr_available and page_needs_ocr(page):
+                if ocr_available and (force_ocr or page_needs_ocr(page)):
                     try:
                         if active_engine == "surya":
                             ocr_text = ocr_page_with_surya(page)
@@ -1088,7 +1132,7 @@ def aggregate_result(stats: ProcessingStats, result: FileResult, improve_mode: b
         stats.processed_bytes += result.processed_bytes
 
 
-def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, max_workers: int) -> int:
+def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, force_ocr: bool, max_workers: int) -> int:
     """Run processing with simple text output using parallel workers."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -1113,6 +1157,7 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, 
                 args.dry_run,
                 use_ocr,
                 ocr_engine,
+                force_ocr,
                 improve_mode
             ): pdf_path for pdf_path in sorted(pdfs)
         }
@@ -1157,7 +1202,7 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, 
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, max_workers: int) -> int:
+def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, force_ocr: bool, max_workers: int) -> int:
     """Run processing with the retro HUD using parallel workers."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -1181,6 +1226,7 @@ def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str
             args.dry_run,
             use_ocr,
             ocr_engine,
+            force_ocr,
             improve_mode
         ): pdf_path for pdf_path in sorted(pdfs)
     }
@@ -1232,7 +1278,7 @@ def run_with_hud_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_with_hud(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
+def run_with_hud(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, force_ocr: bool) -> int:
     """Run processing with the retro HUD."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -1256,6 +1302,7 @@ def run_with_hud(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
                 dry_run=args.dry_run,
                 use_ocr=use_ocr,
                 ocr_engine=ocr_engine,
+                force_ocr=force_ocr,
                 improve=improve_mode,
                 stats=stats,
                 hud=hud
@@ -1305,7 +1352,7 @@ def run_with_hud(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
     return 1 if stats.failed_files > 0 else 0
 
 
-def run_simple(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
+def run_simple(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, force_ocr: bool) -> int:
     """Run processing with simple text output."""
     stats = ProcessingStats()
     stats.total_files = len(pdfs)
@@ -1332,6 +1379,7 @@ def run_simple(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
             dry_run=args.dry_run,
             use_ocr=use_ocr,
             ocr_engine=ocr_engine,
+            force_ocr=force_ocr,
             improve=improve_mode,
             stats=stats
         )
@@ -1446,6 +1494,16 @@ def main() -> int:
         help="Disable OCR for image-based pages"
     )
     parser.add_argument(
+        "--force-ocr",
+        action="store_true",
+        help="Force OCR on all pages, even those with extractable text"
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU mode for OCR (slower but avoids GPU memory issues)"
+    )
+    parser.add_argument(
         "--ocr-engine",
         choices=["paddle", "surya", "tesseract"],
         default="surya",
@@ -1466,6 +1524,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # Force CPU mode if requested (must be set before any CUDA imports)
+    if args.cpu:
+        import os
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
     # Convert and validate path
     directory = convert_windows_path(args.directory)
 
@@ -1480,6 +1543,7 @@ def main() -> int:
     # Check OCR availability
     use_ocr = not args.no_ocr
     ocr_engine = args.ocr_engine
+    force_ocr = getattr(args, 'force_ocr', False)
 
     if args.debug:
         print("[DEBUG] OCR engine availability:")
@@ -1518,8 +1582,13 @@ def main() -> int:
     # Non-OCR extraction is lightweight and can use more workers
     cpu_count = os.cpu_count() or 4
     if use_ocr:
-        # Conservative default for OCR: max 2 workers to avoid memory exhaustion
-        default_workers = min(2, cpu_count - 1)
+        # OCR is memory-intensive; Surya loads large GPU models per worker
+        if ocr_engine == "surya":
+            # Surya requires ~4GB VRAM per worker; use single worker to avoid OOM
+            default_workers = 1
+        else:
+            # PaddleOCR/Tesseract: max 2 workers to avoid memory exhaustion
+            default_workers = min(2, cpu_count - 1)
     else:
         # Text-only extraction can safely use more parallelism
         default_workers = max(cpu_count - 1, 1)
@@ -1530,15 +1599,15 @@ def main() -> int:
     if max_workers == 1:
         # Sequential processing (original behavior)
         if args.hud and not args.dry_run:
-            return run_with_hud(pdfs, args, use_ocr, ocr_engine)
+            return run_with_hud(pdfs, args, use_ocr, ocr_engine, force_ocr)
         else:
-            return run_simple(pdfs, args, use_ocr, ocr_engine)
+            return run_simple(pdfs, args, use_ocr, ocr_engine, force_ocr)
     else:
         # Parallel processing
         if args.hud and not args.dry_run:
-            return run_with_hud_parallel(pdfs, args, use_ocr, ocr_engine, max_workers)
+            return run_with_hud_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
         else:
-            return run_simple_parallel(pdfs, args, use_ocr, ocr_engine, max_workers)
+            return run_simple_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
 
 
 if __name__ == "__main__":
