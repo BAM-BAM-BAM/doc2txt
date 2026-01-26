@@ -215,6 +215,7 @@ class FileResult:
     was_kept: bool = False
     was_skipped: bool = False
     was_failed: bool = False
+    log_messages: list = field(default_factory=list)
 
 
 class RetroHUD:
@@ -245,6 +246,31 @@ class RetroHUD:
         curses.echo()
         curses.curs_set(1)
         curses.endwin()
+        self.print_final_summary()
+
+    def print_final_summary(self):
+        """Print a final summary after exiting curses mode."""
+        s = self.stats
+        elapsed = s.elapsed()
+        mb_processed = s.processed_bytes / (1024 * 1024)
+        mb_total = s.total_bytes / (1024 * 1024)
+        md_mb = s.md_bytes / (1024 * 1024)
+        ratio = (s.md_bytes / s.processed_bytes * 100) if s.processed_bytes > 0 else 0
+        files_per_min = (s.processed_files / elapsed * 60) if elapsed > 0 else 0
+        mb_per_min = (mb_processed / elapsed * 60) if elapsed > 0 else 0
+
+        print()
+        print("═" * 60)
+        print("  PDF2TXT - FINAL RESULTS")
+        print("═" * 60)
+        print(f"  Files:     {s.processed_files:,} processed, {s.skipped_files:,} skipped, {s.failed_files:,} failed")
+        if s.improved_files > 0 or s.kept_existing > 0:
+            print(f"  Quality:   {s.improved_files:,} improved, {s.kept_existing:,} kept existing")
+        print(f"  Pages:     {s.processed_pages:,} total, {s.ocr_pages:,} OCR'd ({s.ocr_chars:,} chars)")
+        print(f"  Data:      {mb_processed:.2f} MB in → {md_mb:.2f} MB out ({ratio:.1f}%)")
+        print(f"  Time:      {elapsed:.1f}s ({files_per_min:.1f} files/min, {mb_per_min:.2f} MB/min)")
+        print("═" * 60)
+        print()
 
     def draw_box(self, y: int, x: int, h: int, w: int, title: str = ""):
         """Draw a retro-style box."""
@@ -466,7 +492,9 @@ def check_paddleocr_available() -> bool:
 def check_surya_available() -> bool:
     """Check if Surya OCR is available."""
     try:
-        import surya
+        # Suppress Surya's "Checking connectivity" message during import
+        with SuppressOutputFD(suppress=True):
+            import surya
         return True
     except ImportError:
         return False
@@ -482,10 +510,16 @@ def get_paddle_ocr():
     global _paddle_ocr_instance
     if _paddle_ocr_instance is None:
         from paddleocr import PaddleOCR
-        # Suppress PaddleOCR's verbose logging
+        # Suppress PaddleOCR's verbose logging via Python logging module
         import logging
         logging.getLogger('ppocr').setLevel(logging.ERROR)
-        _paddle_ocr_instance = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+        logging.getLogger('paddle').setLevel(logging.ERROR)
+        logging.getLogger('paddlenlp').setLevel(logging.ERROR)
+        logging.getLogger('paddlex').setLevel(logging.ERROR)
+        # Suppress stdout/stderr during initialization (native code spam)
+        with SuppressOutputFD(suppress=True):
+            # Note: PaddleOCR v3+ uses use_textline_orientation instead of use_angle_cls
+            _paddle_ocr_instance = PaddleOCR(use_textline_orientation=True, lang='en')
     return _paddle_ocr_instance
 
 
@@ -493,34 +527,73 @@ def get_surya_ocr():
     """Get or create the global Surya OCR models."""
     global _surya_ocr_instance
     if _surya_ocr_instance is None:
-        from surya.recognition import RecognitionPredictor
+        from surya.recognition import RecognitionPredictor, FoundationPredictor
         from surya.detection import DetectionPredictor
+        detection = DetectionPredictor()
+        foundation = FoundationPredictor()
+        recognition = RecognitionPredictor(foundation)
         _surya_ocr_instance = {
-            'recognition': RecognitionPredictor(),
-            'detection': DetectionPredictor(),
+            'recognition': recognition,
+            'detection': detection,
         }
     return _surya_ocr_instance
 
 
-def ocr_page_with_paddle(page, dpi: int = 300) -> str:
+def ocr_page_with_paddle(page, dpi: int = 300, debug: bool = False) -> str:
     """Extract text from a PDF page using PaddleOCR."""
+    import io
+    import numpy as np
+    from PIL import Image
+
     # Render page to image
     pix = page.get_pixmap(dpi=dpi)
     img_data = pix.tobytes("png")
 
-    # Run PaddleOCR
-    ocr = get_paddle_ocr()
-    result = ocr.ocr(img_data, cls=True)
+    # Convert PNG bytes to numpy array (PaddleOCR needs numpy array, not raw bytes)
+    img = Image.open(io.BytesIO(img_data))
+    # Ensure RGB mode (PaddleOCR doesn't handle RGBA well)
+    if img.mode == 'RGBA':
+        img = img.convert('RGB')
+    img_array = np.array(img)
 
-    # Extract text from results
-    if not result or not result[0]:
+    # Run PaddleOCR with output suppression (native code spams binary data)
+    ocr = get_paddle_ocr()
+    with SuppressOutputFD(suppress=True):
+        result = ocr.ocr(img_array)
+
+    # Extract text from results - handle multiple API versions
+    if not result:
         return ""
 
     lines = []
-    for line in result[0]:
-        if line and len(line) >= 2:
-            text = line[1][0] if isinstance(line[1], (list, tuple)) else line[1]
-            lines.append(text)
+
+    # New PaddleOCR API (v3+) returns dict with 'rec_texts'
+    if isinstance(result, dict):
+        if debug:
+            import sys
+            print(f"[DEBUG] PaddleOCR result type: dict, keys: {list(result.keys())}", file=sys.stderr)
+        if 'rec_texts' in result:
+            lines = [str(t) for t in result['rec_texts'] if t]
+        elif 'data' in result and isinstance(result['data'], dict):
+            # Another possible format
+            if 'rec_texts' in result['data']:
+                lines = [str(t) for t in result['data']['rec_texts'] if t]
+    # Old API returns list of lists: [[[bbox, (text, conf)], ...]]
+    elif isinstance(result, list):
+        if debug:
+            import sys
+            print(f"[DEBUG] PaddleOCR result type: list, len: {len(result)}, first item type: {type(result[0]) if result else None}", file=sys.stderr)
+        if not result[0]:
+            return ""
+        for line in result[0]:
+            if line and len(line) >= 2:
+                text = line[1][0] if isinstance(line[1], (list, tuple)) else line[1]
+                if text:
+                    lines.append(str(text))
+    else:
+        if debug:
+            import sys
+            print(f"[DEBUG] PaddleOCR result type: {type(result)}", file=sys.stderr)
 
     return '\n'.join(lines)
 
@@ -529,8 +602,6 @@ def ocr_page_with_surya(page, dpi: int = 300) -> str:
     """Extract text from a PDF page using Surya OCR."""
     import io
     from PIL import Image
-    from surya.recognition import run_recognition
-    from surya.detection import run_detection
 
     # Render page to image
     pix = page.get_pixmap(dpi=dpi)
@@ -540,11 +611,8 @@ def ocr_page_with_surya(page, dpi: int = 300) -> str:
     # Get OCR models
     models = get_surya_ocr()
 
-    # Detect text regions
-    det_results = run_detection([img], models['detection'])
-
-    # Recognize text
-    rec_results = run_recognition([img], det_results, models['recognition'])
+    # Run recognition with detection (new Surya API)
+    rec_results = models['recognition']([img], det_predictor=models['detection'])
 
     # Extract text from results
     if not rec_results or not rec_results[0]:
@@ -837,6 +905,8 @@ def process_pdf_worker(
         processed_bytes=file_size
     )
 
+    log_msgs = []
+
     def extract_pages() -> tuple[list[str], int, int]:
         """Extract text from all pages, returning (pages, ocr_pages, ocr_chars)."""
         doc = pymupdf.open(pdf_path)
@@ -848,27 +918,44 @@ def process_pdf_worker(
         active_engine = ocr_engine
         if not use_ocr or ocr_engine == "none":
             ocr_available = False
+            log_msgs.append("OCR: disabled")
         elif ocr_engine == "surya":
             ocr_available = check_surya_available()
             if not ocr_available:
                 ocr_available = check_paddleocr_available()
                 if ocr_available:
                     active_engine = "paddle"
+                    log_msgs.append(f"OCR: surya unavailable, using paddle")
                 else:
                     ocr_available = check_tesseract_available()
                     if ocr_available:
                         active_engine = "tesseract"
+                        log_msgs.append(f"OCR: surya/paddle unavailable, using tesseract")
+                    else:
+                        log_msgs.append("OCR: no engines available (surya/paddle/tesseract)")
+            else:
+                log_msgs.append(f"OCR: using {active_engine}")
         elif ocr_engine == "paddle":
             ocr_available = check_paddleocr_available()
             if not ocr_available:
                 ocr_available = check_tesseract_available()
                 if ocr_available:
                     active_engine = "tesseract"
+                    log_msgs.append(f"OCR: paddle unavailable, using tesseract")
+                else:
+                    log_msgs.append("OCR: no engines available (paddle/tesseract)")
+            else:
+                log_msgs.append(f"OCR: using {active_engine}")
         else:
             ocr_available = check_tesseract_available()
+            if ocr_available:
+                log_msgs.append(f"OCR: using tesseract")
+            else:
+                log_msgs.append("OCR: tesseract unavailable")
 
+        total_pages = len(doc)
         try:
-            for page in doc:
+            for page_num, page in enumerate(doc, start=1):
                 text = page.get_text().strip()
 
                 if ocr_available and page_needs_ocr(page):
@@ -881,12 +968,17 @@ def process_pdf_worker(
                             tp = page.get_textpage_ocr(full=True, language="eng")
                             ocr_text = page.get_text(textpage=tp).strip()
 
-                        if len(ocr_text) > len(text):
+                        orig_len = len(text)
+                        ocr_len = len(ocr_text)
+                        if ocr_len > orig_len:
                             text = ocr_text
                             ocr_pages_count += 1
-                            ocr_chars_count += len(ocr_text)
-                    except Exception:
-                        pass  # Keep original text
+                            ocr_chars_count += ocr_len
+                            log_msgs.append(f"  p{page_num}/{total_pages}: OCR +{ocr_len:,} chars")
+                        else:
+                            log_msgs.append(f"  p{page_num}/{total_pages}: kept original ({orig_len:,} chars)")
+                    except Exception as e:
+                        log_msgs.append(f"  p{page_num}/{total_pages}: OCR FAILED - {e}")
 
                 pages.append(text)
         finally:
@@ -914,6 +1006,7 @@ def process_pdf_worker(
             result.pages_processed = len(pages)
             result.ocr_pages = ocr_pages_count
             result.ocr_chars = ocr_chars_count
+            result.log_messages = log_msgs
 
             if is_better:
                 md_path.write_text(new_markdown, encoding='utf-8')
@@ -934,6 +1027,7 @@ def process_pdf_worker(
         except Exception as e:
             result.was_failed = True
             result.message = f"FAILED: {pdf_path.name} - {e}"
+            result.log_messages = log_msgs
             return result
 
     # Standard mode: skip existing unless overwrite
@@ -958,6 +1052,7 @@ def process_pdf_worker(
         result.pages_processed = len(pages)
         result.ocr_pages = ocr_pages_count
         result.ocr_chars = ocr_chars_count
+        result.log_messages = log_msgs
         result.success = True
         result.message = f"Created: {md_path.name}"
         return result
@@ -965,6 +1060,7 @@ def process_pdf_worker(
     except Exception as e:
         result.was_failed = True
         result.message = f"FAILED: {pdf_path.name} - {e}"
+        result.log_messages = log_msgs
         return result
 
 
@@ -1029,6 +1125,9 @@ def run_simple_parallel(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str, 
                 print(f"  {result.message}")
                 if result.improve_detail:
                     print(f"     {result.improve_detail}")
+            if getattr(args, 'debug', False) and result.log_messages:
+                for msg in result.log_messages:
+                    print(f"    [DEBUG] {msg}")
 
     elapsed = stats.elapsed()
 
@@ -1241,6 +1340,10 @@ def run_simple(pdfs: list[Path], args, use_ocr: bool, ocr_engine: str) -> int:
             print(f"  {message}")
             if improve_detail:
                 print(f"     {improve_detail}")
+        if getattr(args, 'debug', False) and stats.log_messages:
+            for msg in stats.log_messages:
+                print(f"    [DEBUG] {msg}")
+            stats.log_messages.clear()
 
         if improve_mode and "Improved:" in message:
             stats.improved_files += 1
@@ -1345,15 +1448,20 @@ def main() -> int:
     parser.add_argument(
         "--ocr-engine",
         choices=["paddle", "surya", "tesseract"],
-        default="paddle",
-        help="OCR engine to use (default: paddle)"
+        default="surya",
+        help="OCR engine to use (default: surya). Note: PaddleOCR v3.3 has a known bug, use surya or tesseract instead."
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show detailed OCR debug information"
     )
     parser.add_argument(
         "-j", "--jobs",
         type=int,
         default=None,
         metavar="N",
-        help="Number of parallel workers (default: CPU count, use 1 for sequential)"
+        help="Number of parallel workers (default: CPU count - 1, use 1 for sequential)"
     )
 
     args = parser.parse_args()
@@ -1372,6 +1480,14 @@ def main() -> int:
     # Check OCR availability
     use_ocr = not args.no_ocr
     ocr_engine = args.ocr_engine
+
+    if args.debug:
+        print("[DEBUG] OCR engine availability:")
+        print(f"  Surya: {check_surya_available()}")
+        print(f"  PaddleOCR: {check_paddleocr_available()}")
+        print(f"  Tesseract: {check_tesseract_available()}")
+        print(f"  Requested: {args.ocr_engine}")
+        print()
 
     if use_ocr:
         # Check if requested engine is available, with fallback
@@ -1398,7 +1514,16 @@ def main() -> int:
         return 0
 
     # Determine worker count
-    max_workers = args.jobs if args.jobs is not None else (os.cpu_count() or 4)
+    # OCR is memory-intensive (each worker loads 1-2GB+ ML models), so limit parallelism
+    # Non-OCR extraction is lightweight and can use more workers
+    cpu_count = os.cpu_count() or 4
+    if use_ocr:
+        # Conservative default for OCR: max 2 workers to avoid memory exhaustion
+        default_workers = min(2, cpu_count - 1)
+    else:
+        # Text-only extraction can safely use more parallelism
+        default_workers = max(cpu_count - 1, 1)
+    max_workers = args.jobs if args.jobs is not None else default_workers
     max_workers = max(1, max_workers)  # Ensure at least 1
 
     # Run with HUD or simple mode, sequential or parallel
