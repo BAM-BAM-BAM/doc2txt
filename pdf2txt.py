@@ -500,6 +500,126 @@ def check_surya_available() -> bool:
         return False
 
 
+def get_gpu_info() -> dict:
+    """Get GPU information for debugging."""
+    info = {
+        'cuda_available': False,
+        'device_count': 0,
+        'devices': [],
+        'error': None,
+    }
+
+    # Try torch first for CUDA info
+    torch_available = False
+    try:
+        import torch
+        torch_available = True
+        info['cuda_available'] = torch.cuda.is_available()
+        if info['cuda_available']:
+            info['device_count'] = torch.cuda.device_count()
+            for i in range(info['device_count']):
+                device_info = {
+                    'index': i,
+                    'name': torch.cuda.get_device_name(i),
+                    'memory_total': torch.cuda.get_device_properties(i).total_memory,
+                    'memory_allocated': torch.cuda.memory_allocated(i),
+                    'memory_reserved': torch.cuda.memory_reserved(i),
+                }
+                info['devices'].append(device_info)
+    except ImportError:
+        pass
+    except Exception as e:
+        info['error'] = str(e)
+
+    # Always try nvidia-smi for detailed/accurate info (works even without torch)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=name,memory.free,memory.used,memory.total,'
+             'utilization.gpu,temperature.gpu,power.draw,display_active',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            # If we didn't get device info from torch, create entries from nvidia-smi
+            if not info['devices']:
+                info['cuda_available'] = True
+                info['device_count'] = len(lines)
+                for i, line in enumerate(lines):
+                    info['devices'].append({'index': i})
+
+            # Update each device with nvidia-smi data
+            for i, line in enumerate(lines):
+                if i < len(info['devices']):
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 8:
+                        dev = info['devices'][i]
+                        dev['name'] = parts[0]
+                        dev['memory_free_mb'] = int(parts[1])
+                        dev['memory_used_mb'] = int(parts[2])
+                        dev['memory_total_mb'] = int(parts[3])
+                        dev['gpu_util'] = parts[4]
+                        dev['temperature'] = parts[5]
+                        dev['power_draw'] = parts[6]
+                        dev['display_active'] = parts[7]
+            info['error'] = None  # Clear any torch error if nvidia-smi worked
+    except FileNotFoundError:
+        if not torch_available:
+            info['error'] = 'torch not installed and nvidia-smi not found'
+    except Exception as e:
+        if not info['devices']:
+            info['error'] = str(e)
+
+    return info
+
+
+def print_gpu_debug_info():
+    """Print GPU debugging information."""
+    info = get_gpu_info()
+
+    print("[DEBUG] GPU Information:")
+    if info['error']:
+        print(f"  Error: {info['error']}")
+    else:
+        print(f"  CUDA available: {info['cuda_available']}")
+        if info['cuda_available']:
+            print(f"  Device count: {info['device_count']}")
+            for dev in info['devices']:
+                print(f"  Device {dev['index']}: {dev['name']}")
+                if 'memory_total_mb' in dev:
+                    used = dev['memory_used_mb']
+                    total = dev['memory_total_mb']
+                    free = dev['memory_free_mb']
+                    pct = (used / total * 100) if total > 0 else 0
+                    print(f"    Memory: {used:,} MB used / {total:,} MB total ({pct:.1f}% used)")
+                    print(f"    Free: {free:,} MB")
+                    # Display and power info
+                    if 'display_active' in dev:
+                        display_status = dev['display_active']
+                        if display_status.lower() == 'enabled':
+                            print(f"    Display: Active (using VRAM for framebuffer)")
+                        else:
+                            print(f"    Display: {display_status}")
+                    if 'gpu_util' in dev:
+                        print(f"    GPU Load: {dev['gpu_util']}%  |  Temp: {dev['temperature']}°C  |  Power: {dev['power_draw']}W")
+                else:
+                    total_mb = dev['memory_total'] / (1024 * 1024)
+                    alloc_mb = dev['memory_allocated'] / (1024 * 1024)
+                    reserved_mb = dev['memory_reserved'] / (1024 * 1024)
+                    print(f"    Total: {total_mb:,.0f} MB")
+                    print(f"    PyTorch allocated: {alloc_mb:,.0f} MB")
+                    print(f"    PyTorch reserved: {reserved_mb:,.0f} MB")
+        else:
+            # Check if CUDA_VISIBLE_DEVICES is set (--cpu mode)
+            cuda_env = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+            if cuda_env == '':
+                print("  (CUDA disabled via --cpu flag)")
+            else:
+                print("  (No CUDA devices found)")
+    print()
+
+
 def clear_gpu_memory():
     """Clear GPU memory and attempt to kill zombie CUDA processes."""
     try:
@@ -1545,6 +1665,7 @@ def main() -> int:
     force_ocr = getattr(args, 'force_ocr', False)
 
     if args.debug:
+        print_gpu_debug_info()
         print("[DEBUG] OCR engine availability:")
         print(f"  Surya: {check_surya_available()}")
         print(f"  PaddleOCR: {check_paddleocr_available()}")
