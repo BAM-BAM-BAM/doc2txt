@@ -682,12 +682,51 @@ def get_paddle_ocr():
     return _paddle_ocr_instance
 
 
+def configure_surya_batch_sizes():
+    """Configure Surya batch sizes based on available VRAM.
+
+    Surya defaults:
+    - RECOGNITION_BATCH_SIZE=512 (~40-50MB per item = ~20GB VRAM)
+    - DETECTOR_BATCH_SIZE=default (~280MB per item)
+
+    These must be set BEFORE importing surya modules.
+    """
+    # Skip if already configured or running on CPU
+    if os.environ.get('RECOGNITION_BATCH_SIZE') or os.environ.get('CUDA_VISIBLE_DEVICES') == '':
+        return
+
+    # Get free VRAM
+    gpu_info = get_gpu_info()
+    if not gpu_info['cuda_available'] or not gpu_info['devices']:
+        return
+
+    dev = gpu_info['devices'][0]
+    free_mb = dev.get('memory_free_mb', 0)
+
+    if free_mb <= 0:
+        return
+
+    # Reserve ~4GB for models, use remaining for batching
+    # Recognition: ~50MB per batch item
+    # Detection: ~280MB per batch item
+    available_for_batching = max(0, free_mb - 4000)  # Reserve 4GB for models
+
+    # Calculate safe batch sizes
+    rec_batch = max(4, min(64, available_for_batching // 50))
+    det_batch = max(1, min(8, available_for_batching // 280))
+
+    os.environ['RECOGNITION_BATCH_SIZE'] = str(rec_batch)
+    os.environ['DETECTOR_BATCH_SIZE'] = str(det_batch)
+
+
 def get_surya_ocr():
     """Get or create the global Surya OCR models."""
     global _surya_ocr_instance
     if _surya_ocr_instance is None:
         # Clear any leftover GPU memory before loading heavy models
         clear_gpu_memory()
+        # Configure batch sizes based on available VRAM (must be before import)
+        configure_surya_batch_sizes()
         from surya.recognition import RecognitionPredictor, FoundationPredictor
         from surya.detection import DetectionPredictor
         detection = DetectionPredictor()
@@ -1671,6 +1710,12 @@ def main() -> int:
         print(f"  PaddleOCR: {check_paddleocr_available()}")
         print(f"  Tesseract: {check_tesseract_available()}")
         print(f"  Requested: {args.ocr_engine}")
+        # Pre-configure and show Surya batch sizes if using surya
+        if args.ocr_engine == "surya" and check_surya_available():
+            configure_surya_batch_sizes()
+            rec_batch = os.environ.get('RECOGNITION_BATCH_SIZE', '512 (default)')
+            det_batch = os.environ.get('DETECTOR_BATCH_SIZE', 'default')
+            print(f"  Surya batch sizes: recognition={rec_batch}, detection={det_batch}")
         print()
 
     if use_ocr:
