@@ -2805,7 +2805,9 @@ def main() -> int:
     # Handle learning database commands early
     learn_db_path = Path(args.learn_db) if args.learn_db else None
 
-    if args.learn_stats:
+    # --learn-stats without --learn: show stats and exit
+    # --learn-stats with --learn: process files, stats shown at end
+    if args.learn_stats and not args.learn:
         learner = AdaptiveLearner(db_path=learn_db_path, enabled=True)
         stats = learner.get_stats()
         if not stats["enabled"]:
@@ -2948,15 +2950,43 @@ def main() -> int:
         if max_workers == 1:
             # Sequential processing (original behavior)
             if args.hud and not args.dry_run:
-                return run_with_hud(pdfs, args, use_ocr, ocr_engine, force_ocr, learner=learner)
+                result = run_with_hud(pdfs, args, use_ocr, ocr_engine, force_ocr, learner=learner)
             else:
-                return run_simple(pdfs, args, use_ocr, ocr_engine, force_ocr, learner=learner)
+                result = run_simple(pdfs, args, use_ocr, ocr_engine, force_ocr, learner=learner)
         else:
             # Parallel processing (no learner support)
             if args.hud and not args.dry_run:
-                return run_with_hud_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
+                result = run_with_hud_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
             else:
-                return run_simple_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
+                result = run_simple_parallel(pdfs, args, use_ocr, ocr_engine, force_ocr, max_workers)
+
+        # Show detailed stats if --learn-stats was requested with --learn
+        if args.learn_stats and learner:
+            stats = learner.get_stats()
+            print()
+            print("═" * 60)
+            print("  PDF2TXT - ADAPTIVE LEARNING STATISTICS")
+            print("═" * 60)
+            print(f"  Database: {stats['db_path']}")
+            print(f"  Processed files: {stats['processed_files']:,}")
+            print(f"  Total pages: {stats['total_pages_processed']:,}")
+            print(f"  Total images: {stats['total_images_seen']:,}")
+            print()
+            print(f"  OCR outcomes: {stats['total_records']:,} records")
+            print(f"  OCR'd images: {stats['ocrd_records']:,}")
+            print(f"  Useful results: {stats['useful_records']:,} ({stats['overall_useful_rate']:.1%})")
+            print()
+            if stats['clusters']:
+                print(f"  Clusters: {stats['num_clusters']}")
+                for c in stats['clusters']:
+                    conf_bar = "█" * int(c['confidence'] * 10)
+                    print(f"    #{c['id']:2d}: {c['samples']:5d} samples, "
+                          f"{c['useful_rate']:.1%} useful, conf [{conf_bar:<10}]")
+            else:
+                print("  No clusters formed yet (need more data)")
+            print("═" * 60)
+
+        return result
     finally:
         if learner:
             learner.close()
