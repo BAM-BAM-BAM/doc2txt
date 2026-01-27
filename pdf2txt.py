@@ -55,11 +55,23 @@ class ImageFeature:
     has_contrast: bool  # std > 30
 
     def to_vector(self) -> list[float]:
-        """Convert to numeric vector for clustering."""
+        """Convert to numeric vector for classifier.
+
+        Uses log-scaled area as the dominant size feature since area is the
+        strongest predictor of usefulness (large body images: 89% useful,
+        small images: 7.7% useful).
+        """
+        import math
+        # Log area: ranges from ~2 (100px²) to ~6 (1Mpx²)
+        log_area = math.log10(max(self.area, 1))
+        is_body = 1.0 if self.region == "body" else 0.0
+
         return [
             self.width / 1000,  # Normalize to ~0-2 range
             self.height / 1000,
-            self.area / 1_000_000,
+            self.area / 1_000_000,  # Linear area (kept for backward compat)
+            log_area / 6,  # Log area normalized 0-1, better for small/large distinction
+            log_area * is_body / 6,  # Interaction: large body images are high value
             self.aspect_ratio,
             self.page_y_center,
             {"header": 0.0, "body": 0.5, "footer": 1.0, "margin": 0.25}.get(self.region, 0.5),
@@ -123,10 +135,11 @@ class AdaptiveLearner:
 
     DEFAULT_DB_PATH = Path.home() / ".pdf2txt" / "learning.db"
     MIN_SAMPLES_FOR_PREDICTION = 30  # Need enough data to train classifier
-    MIN_EXPLORATION_RATE = 0.02  # Always explore at least 2%
+    MIN_EXPLORATION_RATE = 0.05  # Always explore at least 5%
     MAX_EXPLORATION_RATE = 0.50  # Start at 50% exploration
     EXPLORATION_HALFLIFE = 200  # Samples to halve exploration rate
     SKIP_PROBABILITY_THRESHOLD = 0.15  # Skip if P(useful) < 15%
+    SKIP_VALIDATION_RATE = 0.10  # Always validate 10% of would-skip decisions
     RETRAIN_INTERVAL = 100  # Retrain every N new samples
 
     # Quality thresholds for usefulness and tracking
@@ -151,6 +164,8 @@ class AdaptiveLearner:
             "exploration_ocrs": 0,
             "exploration_useful": 0,  # Exploration found useful text (would've been bad skip)
             "exploration_empty": 0,   # Exploration found nothing (confirms skip OK)
+            "skip_validation_ocrs": 0,   # Images explored after "would skip" decision
+            "skip_validation_useful": 0, # Skip validations that found useful text (bad skip)
             "quality_regressions": [],  # Files where quality decreased
             "files_with_existing_md": 0,  # Files that had existing .md for comparison
             "quality_improved": 0,   # Count of files where quality improved
@@ -422,6 +437,11 @@ class AdaptiveLearner:
 
             # Skip only if very likely to be useless
             if prob_useful < self.SKIP_PROBABILITY_THRESHOLD:
+                # Force exploration of some "would skip" decisions to validate classifier
+                # This prevents the classifier from never learning when skips are wrong
+                if random.random() < self.SKIP_VALIDATION_RATE:
+                    self._stats["skip_validation_ocrs"] += 1
+                    return True, f"skip-validation (p={prob_useful:.0%})", True
                 self._stats["images_skipped"] += 1
                 return False, f"classifier: {prob_useful:.0%} useful", False
 
@@ -438,6 +458,30 @@ class AdaptiveLearner:
         if features.area < 400:  # 20x20
             self._stats["images_skipped"] += 1
             return False, "heuristic: tiny image"
+
+        # Skip small header/footer images (logos, decorations)
+        # Data: header <10K = 13.6% useful, footer <10K = 7.3% useful
+        if features.region in ("header", "footer") and features.area < 10000:
+            self._stats["images_skipped"] += 1
+            return False, "heuristic: small header/footer"
+
+        # Skip wide decorative strips in header/footer
+        # Data: wide header/footer (aspect>2) = 0% useful
+        if features.region in ("header", "footer") and features.aspect_ratio > 2:
+            self._stats["images_skipped"] += 1
+            return False, "heuristic: wide decoration"
+
+        # Skip very small body images
+        # Data: body <2.5K = 0% useful
+        if features.region == "body" and features.area < 2500:
+            self._stats["images_skipped"] += 1
+            return False, "heuristic: small body image"
+
+        # Skip dark large images (photos, diagrams without text)
+        # Data: brightness<150 + area>50K = only 4% useful
+        if features.area > 50000 and features.brightness_mean < 150:
+            self._stats["images_skipped"] += 1
+            return False, "heuristic: dark large image"
 
         # Skip mostly-white images with no contrast (likely blank/whitespace)
         if features.is_mostly_white and not features.has_contrast:
@@ -461,6 +505,7 @@ class AdaptiveLearner:
         ocr_performed: bool,
         text: str,
         is_exploration: bool = False,
+        reason: str = "",
     ):
         """Record the outcome of an OCR decision."""
         if not self.enabled or not self._conn:
@@ -486,8 +531,12 @@ class AdaptiveLearner:
             else:
                 self._stats["ocr_empty"] += 1
 
-            # Track exploration accuracy separately
-            if is_exploration:
+            # Track skip validation accuracy (images that would've been skipped)
+            if reason.startswith("skip-validation"):
+                if is_useful:
+                    self._stats["skip_validation_useful"] += 1  # Bad skip prevented
+            # Track general exploration accuracy separately
+            elif is_exploration:
                 if is_useful:
                     self._stats["exploration_useful"] += 1  # Would've been bad to skip
                 else:
@@ -684,6 +733,14 @@ class AdaptiveLearner:
         else:
             skip_accuracy = None
 
+        # Skip validation stats: how often "would skip" decisions were actually useful
+        skip_val_total = self._stats.get("skip_validation_ocrs", 0)
+        skip_val_useful = self._stats.get("skip_validation_useful", 0)
+        if skip_val_total > 0:
+            skip_validation_error_rate = skip_val_useful / skip_val_total
+        else:
+            skip_validation_error_rate = None
+
         return {
             "enabled": True,
             "db_path": str(self.db_path),
@@ -702,6 +759,9 @@ class AdaptiveLearner:
             "total_images_seen": total_images,
             "quality_stats": quality_stats,
             "skip_accuracy": skip_accuracy,
+            "skip_validation_total": skip_val_total,
+            "skip_validation_useful": skip_val_useful,
+            "skip_validation_error_rate": skip_validation_error_rate,
         }
 
     def reset(self):
@@ -725,6 +785,8 @@ class AdaptiveLearner:
             "exploration_ocrs": 0,
             "exploration_useful": 0,
             "exploration_empty": 0,
+            "skip_validation_ocrs": 0,
+            "skip_validation_useful": 0,
             "quality_regressions": [],
             "files_with_existing_md": 0,
             "quality_improved": 0,
@@ -1778,9 +1840,10 @@ def ocr_image_region(
     # Extract features for learning
     features = None
     is_exploration = False
+    ocr_reason = ""
     if learner:
         features = extract_image_features(page, bbox, img, text_blocks)
-        do_ocr, reason, is_exploration = learner.should_ocr(features)
+        do_ocr, ocr_reason, is_exploration = learner.should_ocr(features)
         if not do_ocr:
             # Record that we skipped this image (no OCR, no text)
             learner.record_outcome(features, pdf_path, page_num, image_index, False, "")
@@ -1821,7 +1884,7 @@ def ocr_image_region(
 
     # Record outcome for learning
     if learner and features:
-        learner.record_outcome(features, pdf_path, page_num, image_index, True, text, is_exploration)
+        learner.record_outcome(features, pdf_path, page_num, image_index, True, text, is_exploration, ocr_reason)
 
     return text, True
 
@@ -2862,6 +2925,12 @@ def print_learning_stats(stats: dict) -> None:
         print(f"    Images skipped: {skipped:,} ({skip_pct:.1f}%)")
     if stats.get('skip_accuracy') is not None:
         print(f"    Skip accuracy: {stats['skip_accuracy']:.1%} (no quality loss)")
+    # Skip validation: tests of "would skip" decisions
+    if stats.get('skip_validation_total', 0) > 0:
+        sv_total = stats['skip_validation_total']
+        sv_useful = stats['skip_validation_useful']
+        sv_error = stats.get('skip_validation_error_rate', 0)
+        print(f"    Skip validation: {sv_total} tested, {sv_useful} useful ({sv_error:.0%} error rate)")
     print()
 
     # Classifier section
