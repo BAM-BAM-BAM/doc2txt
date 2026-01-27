@@ -8,6 +8,7 @@ import curses
 import math
 import multiprocessing
 import os
+import random
 import re
 import sys
 import time
@@ -108,57 +109,39 @@ class OCROutcome:
     cluster_id: int = -1  # Assigned cluster (-1 = not yet clustered)
 
 
-@dataclass
-class ClusterStats:
-    """Aggregated statistics for a feature cluster."""
-    cluster_id: int
-    sample_count: int
-    useful_count: int
-    # Beta distribution parameters for Bayesian updating
-    alpha: float  # Prior + successes
-    beta: float  # Prior + failures
-    # Decay-weighted recent stats
-    recent_useful_rate: float
-    last_updated: float
-
-    def usefulness_probability(self) -> float:
-        """Expected probability that OCR will be useful for this cluster."""
-        return self.alpha / (self.alpha + self.beta)
-
-    def confidence(self) -> float:
-        """Confidence in the estimate (0-1 based on sample count)."""
-        return min(1.0, self.sample_count / 50)  # Full confidence at 50 samples
-
-    def thompson_sample(self) -> float:
-        """Thompson sampling: draw from Beta distribution for exploration."""
-        import random
-        return random.betavariate(self.alpha, self.beta)
+# ClusterStats removed - now using supervised classifier instead of clustering
 
 
 class AdaptiveLearner:
-    """Adaptive OCR learning system using feature-based clustering.
+    """Adaptive OCR learning system using supervised classification.
 
     Learns which image types are worth OCR'ing based on:
     - Image features (size, position, brightness, etc.)
-    - K-means clustering to group similar images
-    - Bayesian updating with Beta distribution per cluster
-    - Thompson sampling for exploration/exploitation balance
+    - Logistic regression classifier trained on OCR outcomes
+    - Adaptive exploration rate (high early, decreases as confidence grows)
     """
 
     DEFAULT_DB_PATH = Path.home() / ".pdf2txt" / "learning.db"
-    NUM_CLUSTERS = 12
-    MIN_SAMPLES_FOR_PREDICTION = 20
-    MIN_SAMPLES_PER_CLUSTER = 10
-    EXPLORATION_RATE = 0.10  # Always OCR 10% for learning
-    SKIP_CONFIDENCE_THRESHOLD = 0.60
-    SKIP_USEFULNESS_THRESHOLD = 0.10
+    MIN_SAMPLES_FOR_PREDICTION = 30  # Need enough data to train classifier
+    MIN_EXPLORATION_RATE = 0.02  # Always explore at least 2%
+    MAX_EXPLORATION_RATE = 0.50  # Start at 50% exploration
+    EXPLORATION_HALFLIFE = 200  # Samples to halve exploration rate
+    SKIP_PROBABILITY_THRESHOLD = 0.15  # Skip if P(useful) < 15%
+    RETRAIN_INTERVAL = 100  # Retrain every N new samples
+
+    # Quality thresholds for usefulness and tracking
+    USEFUL_QUALITY_THRESHOLD = 0.2  # Minimum quality score to be "useful"
+    USEFUL_WORD_RATIO_THRESHOLD = 0.2  # Minimum real word ratio to be "useful"
+    QUALITY_IMPROVED_THRESHOLD = 0.02  # Delta > this = improved
+    QUALITY_REGRESSION_THRESHOLD = -0.02  # Delta < this = regressed
 
     def __init__(self, db_path: Path | None = None, enabled: bool = True):
         self.db_path = db_path or self.DEFAULT_DB_PATH
         self.enabled = enabled
         self._conn = None
-        self._cluster_centers: list[list[float]] | None = None
-        self._cluster_stats: dict[int, ClusterStats] = {}
+        self._classifier = None  # Trained LogisticRegression model
+        self._total_samples = 0  # Total training samples
+        self._last_train_count = 0  # Samples at last training
         self._stats = {
             "images_seen": 0,
             "images_skipped": 0,
@@ -168,11 +151,15 @@ class AdaptiveLearner:
             "exploration_ocrs": 0,
             "exploration_useful": 0,  # Exploration found useful text (would've been bad skip)
             "exploration_empty": 0,   # Exploration found nothing (confirms skip OK)
+            "quality_regressions": [],  # Files where quality decreased
+            "files_with_existing_md": 0,  # Files that had existing .md for comparison
+            "quality_improved": 0,   # Count of files where quality improved
+            "quality_unchanged": 0,  # Count of files with similar quality
         }
 
         if self.enabled:
             self._init_db()
-            self._load_cluster_stats()
+            self._load_classifier()
 
     def _init_db(self):
         """Initialize SQLite database with required tables."""
@@ -213,18 +200,6 @@ class AdaptiveLearner:
             );
 
             CREATE INDEX IF NOT EXISTS idx_ocr_outcomes_timestamp ON ocr_outcomes(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_ocr_outcomes_cluster ON ocr_outcomes(cluster_id);
-
-            CREATE TABLE IF NOT EXISTS cluster_stats (
-                cluster_id INTEGER PRIMARY KEY,
-                sample_count INTEGER NOT NULL DEFAULT 0,
-                useful_count INTEGER NOT NULL DEFAULT 0,
-                alpha REAL NOT NULL DEFAULT 1.0,
-                beta REAL NOT NULL DEFAULT 1.0,
-                recent_useful_rate REAL NOT NULL DEFAULT 0.5,
-                last_updated REAL NOT NULL,
-                center_vector TEXT  -- JSON array of cluster center
-            );
 
             CREATE TABLE IF NOT EXISTS learning_meta (
                 key TEXT PRIMARY KEY,
@@ -239,72 +214,171 @@ class AdaptiveLearner:
                 page_count INTEGER NOT NULL,
                 image_count INTEGER NOT NULL,
                 processed_at REAL NOT NULL,
-                last_seen_at REAL NOT NULL
+                last_seen_at REAL NOT NULL,
+                -- Quality tracking columns (added for adaptive learning v2)
+                quality_score REAL,
+                quality_word_count INTEGER,
+                previous_quality_score REAL,
+                quality_delta REAL,
+                extraction_mode TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_processed_files_path ON processed_files(pdf_path);
         """)
+
+        # Migration: add quality columns to existing databases
+        try:
+            cursor = self._conn.execute("PRAGMA table_info(processed_files)")
+            columns = {row[1] for row in cursor.fetchall()}
+            migrations = [
+                ("quality_score", "ALTER TABLE processed_files ADD COLUMN quality_score REAL"),
+                ("quality_word_count", "ALTER TABLE processed_files ADD COLUMN quality_word_count INTEGER"),
+                ("previous_quality_score", "ALTER TABLE processed_files ADD COLUMN previous_quality_score REAL"),
+                ("quality_delta", "ALTER TABLE processed_files ADD COLUMN quality_delta REAL"),
+                ("extraction_mode", "ALTER TABLE processed_files ADD COLUMN extraction_mode TEXT"),
+            ]
+            for col_name, sql in migrations:
+                if col_name not in columns:
+                    self._conn.execute(sql)
+            self._conn.commit()
+        except Exception:
+            pass  # Ignore migration errors on fresh DB
         self._conn.commit()
 
-    def _load_cluster_stats(self):
-        """Load cluster statistics from database."""
+    def _load_classifier(self):
+        """Load or train the classifier from stored data."""
         if not self._conn:
             return
 
-        cursor = self._conn.execute("SELECT * FROM cluster_stats")
-        for row in cursor:
-            self._cluster_stats[row["cluster_id"]] = ClusterStats(
-                cluster_id=row["cluster_id"],
-                sample_count=row["sample_count"],
-                useful_count=row["useful_count"],
-                alpha=row["alpha"],
-                beta=row["beta"],
-                recent_useful_rate=row["recent_useful_rate"],
-                last_updated=row["last_updated"],
-            )
-
-        # Load cluster centers if available
-        import json
+        # Get total sample count
         cursor = self._conn.execute(
-            "SELECT value FROM learning_meta WHERE key = 'cluster_centers'"
+            "SELECT COUNT(*) as count FROM ocr_outcomes WHERE ocr_performed = 1"
+        )
+        self._total_samples = cursor.fetchone()["count"]
+
+        # Try to load saved classifier
+        import pickle
+        import base64
+        cursor = self._conn.execute(
+            "SELECT value FROM learning_meta WHERE key = 'classifier'"
         )
         row = cursor.fetchone()
         if row:
-            self._cluster_centers = json.loads(row["value"])
+            try:
+                self._classifier = pickle.loads(base64.b64decode(row["value"]))
+                cursor = self._conn.execute(
+                    "SELECT value FROM learning_meta WHERE key = 'last_train_count'"
+                )
+                row = cursor.fetchone()
+                if row:
+                    self._last_train_count = int(row["value"])
+            except Exception:
+                self._classifier = None
 
-    def _save_cluster_stats(self, stats: ClusterStats):
-        """Save cluster statistics to database."""
-        if not self._conn:
+        # Retrain if needed
+        if self._total_samples >= self.MIN_SAMPLES_FOR_PREDICTION:
+            if self._classifier is None or (self._total_samples - self._last_train_count) >= self.RETRAIN_INTERVAL:
+                self._train_classifier()
+
+    def _train_classifier(self):
+        """Train logistic regression classifier on OCR outcomes."""
+        if not self._conn or self._total_samples < self.MIN_SAMPLES_FOR_PREDICTION:
             return
 
-        self._conn.execute("""
-            INSERT OR REPLACE INTO cluster_stats
-            (cluster_id, sample_count, useful_count, alpha, beta, recent_useful_rate, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            stats.cluster_id,
-            stats.sample_count,
-            stats.useful_count,
-            stats.alpha,
-            stats.beta,
-            stats.recent_useful_rate,
-            stats.last_updated,
-        ))
+        try:
+            from sklearn.linear_model import LogisticRegression
+            import numpy as np
+        except ImportError:
+            # sklearn not available, fall back to heuristics
+            return
+
+        # Get training data
+        cursor = self._conn.execute("""
+            SELECT width, height, area, aspect_ratio, page_y_center, region,
+                   surrounding_text_density, has_nearby_caption,
+                   brightness_mean, brightness_std, is_mostly_white, has_contrast,
+                   is_useful
+            FROM ocr_outcomes
+            WHERE ocr_performed = 1
+        """)
+
+        X = []
+        y = []
+        for row in cursor:
+            features = ImageFeature(
+                width=row["width"],
+                height=row["height"],
+                area=row["area"],
+                aspect_ratio=row["aspect_ratio"],
+                page_y_center=row["page_y_center"],
+                region=row["region"],
+                surrounding_text_density=row["surrounding_text_density"],
+                has_nearby_caption=bool(row["has_nearby_caption"]),
+                brightness_mean=row["brightness_mean"],
+                brightness_std=row["brightness_std"],
+                is_mostly_white=bool(row["is_mostly_white"]),
+                has_contrast=bool(row["has_contrast"]),
+            )
+            X.append(features.to_vector())
+            y.append(1 if row["is_useful"] else 0)
+
+        if len(X) < self.MIN_SAMPLES_FOR_PREDICTION:
+            return
+
+        X = np.array(X)
+        y = np.array(y)
+
+        # Train classifier
+        self._classifier = LogisticRegression(
+            class_weight='balanced',  # Handle imbalanced classes
+            max_iter=500,
+            random_state=42,
+        )
+        self._classifier.fit(X, y)
+        self._last_train_count = len(X)
+
+        # Save classifier to database
+        self._save_classifier()
+
+    def _save_classifier(self):
+        """Save trained classifier to database."""
+        if not self._conn or not self._classifier:
+            return
+
+        import pickle
+        import base64
+        classifier_data = base64.b64encode(pickle.dumps(self._classifier)).decode('ascii')
+        self._conn.execute(
+            "INSERT OR REPLACE INTO learning_meta (key, value) VALUES (?, ?)",
+            ("classifier", classifier_data)
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO learning_meta (key, value) VALUES (?, ?)",
+            ("last_train_count", str(self._last_train_count))
+        )
         self._conn.commit()
 
-    def _find_nearest_cluster(self, feature_vector: list[float]) -> int:
-        """Find the nearest cluster for a feature vector."""
-        if not self._cluster_centers:
-            return -1
+    def _exploration_rate(self) -> float:
+        """Calculate adaptive exploration rate based on sample count."""
+        if self._total_samples < self.MIN_SAMPLES_FOR_PREDICTION:
+            return self.MAX_EXPLORATION_RATE  # Explore heavily when learning
+        # Exponential decay: halve every EXPLORATION_HALFLIFE samples
+        decay_factor = 0.5 ** (self._total_samples / self.EXPLORATION_HALFLIFE)
+        rate = self.MAX_EXPLORATION_RATE * decay_factor
+        return max(self.MIN_EXPLORATION_RATE, rate)
 
-        min_dist = float("inf")
-        nearest = -1
-        for i, center in enumerate(self._cluster_centers):
-            dist = sum((a - b) ** 2 for a, b in zip(feature_vector, center))
-            if dist < min_dist:
-                min_dist = dist
-                nearest = i
-        return nearest
+    def _should_explore_uncertainty(self, prob_useful: float) -> bool:
+        """Determine if we should explore based on prediction uncertainty.
+
+        Explores more when predictions are uncertain (near 0.5).
+        This focuses exploration budget on edge cases rather than random images.
+        """
+        base_rate = self._exploration_rate()
+        # Uncertainty is highest (1.0) when prob is 0.5, lowest (0.0) at 0 or 1
+        uncertainty = 1 - abs(prob_useful - 0.5) * 2
+        # Scale exploration rate by uncertainty (4x multiplier for max uncertainty)
+        effective_rate = uncertainty * base_rate * 4
+        return random.random() < effective_rate
 
     def should_ocr(self, features: ImageFeature) -> tuple[bool, str, bool]:
         """Decide whether to OCR this image.
@@ -316,41 +390,47 @@ class AdaptiveLearner:
             return True, "learning disabled", False
 
         self._stats["images_seen"] += 1
-        feature_vector = features.to_vector()
 
-        # Exploration: always OCR some images to keep learning
-        import random
-        if random.random() < self.EXPLORATION_RATE:
-            self._stats["exploration_ocrs"] += 1
-            return True, "exploration", True
-
-        # Not enough data yet - use heuristics
-        total_samples = sum(s.sample_count for s in self._cluster_stats.values())
-        if total_samples < self.MIN_SAMPLES_FOR_PREDICTION:
+        # Not enough data yet - use heuristics with random exploration
+        if self._total_samples < self.MIN_SAMPLES_FOR_PREDICTION:
+            current_exploration_rate = self._exploration_rate()
+            if random.random() < current_exploration_rate:
+                self._stats["exploration_ocrs"] += 1
+                return True, f"exploration ({current_exploration_rate:.0%})", True
             should, reason = self._heuristic_decision(features)
             return should, reason, False
 
-        # Find cluster
-        cluster_id = self._find_nearest_cluster(feature_vector)
-        if cluster_id < 0 or cluster_id not in self._cluster_stats:
+        # No classifier trained yet - use heuristics with random exploration
+        if self._classifier is None:
+            current_exploration_rate = self._exploration_rate()
+            if random.random() < current_exploration_rate:
+                self._stats["exploration_ocrs"] += 1
+                return True, f"exploration ({current_exploration_rate:.0%})", True
             should, reason = self._heuristic_decision(features)
             return should, reason, False
 
-        stats = self._cluster_stats[cluster_id]
-        if stats.sample_count < self.MIN_SAMPLES_PER_CLUSTER:
-            return True, f"cluster {cluster_id} needs more samples", False
+        # Use classifier to predict probability of usefulness
+        try:
+            import numpy as np
+            feature_vector = np.array([features.to_vector()])
+            prob_useful = self._classifier.predict_proba(feature_vector)[0][1]
 
-        # Use Thompson sampling for exploration/exploitation
-        sampled_usefulness = stats.thompson_sample()
-        confidence = stats.confidence()
+            # Uncertainty-based exploration: explore more on edge cases
+            if self._should_explore_uncertainty(prob_useful):
+                self._stats["exploration_ocrs"] += 1
+                return True, f"uncertainty exploration (p={prob_useful:.0%})", True
 
-        # Only skip if confident AND predicted usefulness is very low
-        if confidence > self.SKIP_CONFIDENCE_THRESHOLD and sampled_usefulness < self.SKIP_USEFULNESS_THRESHOLD:
-            self._stats["images_skipped"] += 1
-            return False, f"cluster {cluster_id}: {sampled_usefulness:.1%} useful (conf: {confidence:.1%})", False
+            # Skip only if very likely to be useless
+            if prob_useful < self.SKIP_PROBABILITY_THRESHOLD:
+                self._stats["images_skipped"] += 1
+                return False, f"classifier: {prob_useful:.0%} useful", False
 
-        self._stats["images_ocrd"] += 1
-        return True, f"cluster {cluster_id}: {sampled_usefulness:.1%} useful", False
+            self._stats["images_ocrd"] += 1
+            return True, f"classifier: {prob_useful:.0%} useful", False
+        except Exception:
+            # Fallback to heuristics if prediction fails
+            should, reason = self._heuristic_decision(features)
+            return should, reason, False
 
     def _heuristic_decision(self, features: ImageFeature) -> tuple[bool, str]:
         """Fallback heuristics when not enough learning data."""
@@ -388,7 +468,16 @@ class AdaptiveLearner:
 
         text_length = len(text) if text else 0
         word_count = len(text.split()) if text else 0
-        is_useful = text_length > 10 and word_count >= 2
+
+        # Use TextQualityScorer for better usefulness determination
+        # Old: is_useful = text_length > 10 and word_count >= 2
+        # New: quality_score > threshold and real_word_ratio > threshold
+        if text and text.strip():
+            metrics = _quality_scorer.score(text)
+            is_useful = (metrics.total_score > self.USEFUL_QUALITY_THRESHOLD and
+                        metrics.real_word_ratio > self.USEFUL_WORD_RATIO_THRESHOLD)
+        else:
+            is_useful = False
 
         # Track accuracy metrics
         if ocr_performed:
@@ -403,9 +492,6 @@ class AdaptiveLearner:
                     self._stats["exploration_useful"] += 1  # Would've been bad to skip
                 else:
                     self._stats["exploration_empty"] += 1   # Confirms skipping is OK
-
-        feature_vector = features.to_vector()
-        cluster_id = self._find_nearest_cluster(feature_vector) if self._cluster_centers else -1
 
         # Insert outcome record
         self._conn.execute("""
@@ -423,184 +509,27 @@ class AdaptiveLearner:
             features.surrounding_text_density, int(features.has_nearby_caption),
             features.brightness_mean, features.brightness_std,
             int(features.is_mostly_white), int(features.has_contrast),
-            int(ocr_performed), text_length, word_count, int(is_useful), cluster_id,
+            int(ocr_performed), text_length, word_count, int(is_useful), -1,  # cluster_id deprecated
         ))
         self._conn.commit()
 
-        # Update cluster stats if we have clusters and OCR was performed
-        if ocr_performed and cluster_id >= 0:
-            self._update_cluster_stats(cluster_id, is_useful)
+        # Update sample count and potentially retrain classifier
+        if ocr_performed:
+            self._total_samples += 1
+            if self._total_samples >= self.MIN_SAMPLES_FOR_PREDICTION:
+                if (self._total_samples - self._last_train_count) >= self.RETRAIN_INTERVAL:
+                    self._train_classifier()
 
-    def _update_cluster_stats(self, cluster_id: int, is_useful: bool):
-        """Update statistics for a cluster with Bayesian updating."""
-        if cluster_id not in self._cluster_stats:
-            self._cluster_stats[cluster_id] = ClusterStats(
-                cluster_id=cluster_id,
-                sample_count=0,
-                useful_count=0,
-                alpha=1.0,  # Prior: assume 50% useful
-                beta=1.0,
-                recent_useful_rate=0.5,
-                last_updated=time.time(),
-            )
+    def retrain(self, force: bool = False):
+        """Retrain the classifier on all outcomes.
 
-        stats = self._cluster_stats[cluster_id]
-        stats.sample_count += 1
-        if is_useful:
-            stats.useful_count += 1
-            stats.alpha += 1
-        else:
-            stats.beta += 1
-
-        # Exponential decay for recent rate (weight recent more heavily)
-        decay = 0.95
-        stats.recent_useful_rate = decay * stats.recent_useful_rate + (1 - decay) * (1.0 if is_useful else 0.0)
-        stats.last_updated = time.time()
-
-        self._save_cluster_stats(stats)
-
-    def recluster(self, force: bool = False):
-        """Re-run K-means clustering on all outcomes.
-
-        Called periodically to update cluster assignments.
+        Called to force a classifier update.
         """
         if not self.enabled or not self._conn:
             return
 
-        # Get all feature vectors
-        cursor = self._conn.execute("""
-            SELECT id, width, height, area, aspect_ratio, page_y_center, region,
-                   surrounding_text_density, has_nearby_caption,
-                   brightness_mean, brightness_std, is_mostly_white, has_contrast,
-                   is_useful
-            FROM ocr_outcomes
-            WHERE ocr_performed = 1
-            ORDER BY timestamp DESC
-        """)
-
-        rows = cursor.fetchall()
-        if len(rows) < self.NUM_CLUSTERS * 2:
-            return  # Not enough data for meaningful clustering
-
-        # Build feature matrix
-        import json
-        vectors = []
-        ids = []
-        outcomes = []
-        for row in rows:
-            features = ImageFeature(
-                width=row["width"],
-                height=row["height"],
-                area=row["area"],
-                aspect_ratio=row["aspect_ratio"],
-                page_y_center=row["page_y_center"],
-                region=row["region"],
-                surrounding_text_density=row["surrounding_text_density"],
-                has_nearby_caption=bool(row["has_nearby_caption"]),
-                brightness_mean=row["brightness_mean"],
-                brightness_std=row["brightness_std"],
-                is_mostly_white=bool(row["is_mostly_white"]),
-                has_contrast=bool(row["has_contrast"]),
-            )
-            vectors.append(features.to_vector())
-            ids.append(row["id"])
-            outcomes.append(bool(row["is_useful"]))
-
-        # Simple K-means implementation (avoid sklearn dependency)
-        centers, assignments = self._kmeans(vectors, self.NUM_CLUSTERS)
-
-        # Update cluster assignments in database
-        for record_id, cluster_id in zip(ids, assignments):
-            self._conn.execute(
-                "UPDATE ocr_outcomes SET cluster_id = ? WHERE id = ?",
-                (cluster_id, record_id)
-            )
-
-        # Rebuild cluster stats from assignments
-        self._cluster_stats.clear()
-        for cluster_id, is_useful in zip(assignments, outcomes):
-            if cluster_id not in self._cluster_stats:
-                self._cluster_stats[cluster_id] = ClusterStats(
-                    cluster_id=cluster_id,
-                    sample_count=0,
-                    useful_count=0,
-                    alpha=1.0,
-                    beta=1.0,
-                    recent_useful_rate=0.5,
-                    last_updated=time.time(),
-                )
-            stats = self._cluster_stats[cluster_id]
-            stats.sample_count += 1
-            if is_useful:
-                stats.useful_count += 1
-                stats.alpha += 1
-            else:
-                stats.beta += 1
-
-        # Save cluster centers
-        self._cluster_centers = centers
-        self._conn.execute(
-            "INSERT OR REPLACE INTO learning_meta (key, value) VALUES (?, ?)",
-            ("cluster_centers", json.dumps(centers))
-        )
-
-        # Save all cluster stats
-        for stats in self._cluster_stats.values():
-            stats.recent_useful_rate = stats.useful_count / max(stats.sample_count, 1)
-            self._save_cluster_stats(stats)
-
-        self._conn.commit()
-
-    def _kmeans(self, vectors: list[list[float]], k: int, max_iter: int = 100) -> tuple[list[list[float]], list[int]]:
-        """Simple K-means clustering implementation."""
-        import random
-
-        if not vectors:
-            return [], []
-
-        n_features = len(vectors[0])
-
-        # Initialize centers randomly from data points
-        centers = random.sample(vectors, min(k, len(vectors)))
-        while len(centers) < k:
-            centers.append([random.random() for _ in range(n_features)])
-
-        assignments = [-1] * len(vectors)
-
-        for _ in range(max_iter):
-            # Assign points to nearest center
-            new_assignments = []
-            for vec in vectors:
-                min_dist = float("inf")
-                nearest = 0
-                for i, center in enumerate(centers):
-                    dist = sum((a - b) ** 2 for a, b in zip(vec, center))
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest = i
-                new_assignments.append(nearest)
-
-            # Check for convergence
-            if new_assignments == assignments:
-                break
-            assignments = new_assignments
-
-            # Update centers
-            new_centers = [[0.0] * n_features for _ in range(k)]
-            counts = [0] * k
-            for vec, cluster_id in zip(vectors, assignments):
-                for j, val in enumerate(vec):
-                    new_centers[cluster_id][j] += val
-                counts[cluster_id] += 1
-
-            for i in range(k):
-                if counts[i] > 0:
-                    new_centers[i] = [v / counts[i] for v in new_centers[i]]
-                else:
-                    new_centers[i] = centers[i]  # Keep old center if empty
-            centers = new_centers
-
-        return centers, assignments
+        if force or self._total_samples >= self.MIN_SAMPLES_FOR_PREDICTION:
+            self._train_classifier()
 
     @staticmethod
     def compute_file_hash(pdf_path: Path) -> str:
@@ -640,8 +569,12 @@ class AdaptiveLearner:
         pdf_path: Path,
         page_count: int,
         image_count: int,
+        quality_score: float | None = None,
+        quality_word_count: int | None = None,
+        previous_quality_score: float | None = None,
+        extraction_mode: str | None = None,
     ):
-        """Record that a file has been processed."""
+        """Record that a file has been processed with quality metrics."""
         if not self.enabled or not self._conn:
             return
 
@@ -649,12 +582,28 @@ class AdaptiveLearner:
         file_size = pdf_path.stat().st_size
         now = time.time()
 
+        # Compute quality delta if we have both scores
+        quality_delta = None
+        if quality_score is not None and previous_quality_score is not None:
+            quality_delta = quality_score - previous_quality_score
+
         self._conn.execute("""
             INSERT OR REPLACE INTO processed_files
-            (file_hash, pdf_path, file_size, page_count, image_count, processed_at, last_seen_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (file_hash, str(pdf_path), file_size, page_count, image_count, now, now))
+            (file_hash, pdf_path, file_size, page_count, image_count, processed_at, last_seen_at,
+             quality_score, quality_word_count, previous_quality_score, quality_delta, extraction_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (file_hash, str(pdf_path), file_size, page_count, image_count, now, now,
+              quality_score, quality_word_count, previous_quality_score, quality_delta, extraction_mode))
         self._conn.commit()
+
+        # Track quality regressions in session stats
+        if quality_delta is not None and quality_delta < self.QUALITY_REGRESSION_THRESHOLD:
+            self._stats["quality_regressions"].append({
+                "path": str(pdf_path),
+                "old_score": previous_quality_score,
+                "new_score": quality_score,
+                "delta": quality_delta,
+            })
 
     def get_stats(self) -> dict:
         """Get learning statistics for display."""
@@ -674,15 +623,6 @@ class AdaptiveLearner:
         )
         ocrd_records = cursor.fetchone()["ocrd"]
 
-        cluster_info = []
-        for stats in sorted(self._cluster_stats.values(), key=lambda s: s.cluster_id):
-            cluster_info.append({
-                "id": stats.cluster_id,
-                "samples": stats.sample_count,
-                "useful_rate": stats.usefulness_probability(),
-                "confidence": stats.confidence(),
-            })
-
         # Get processed files stats
         cursor = self._conn.execute("SELECT COUNT(*) as count FROM processed_files")
         processed_files_count = cursor.fetchone()["count"]
@@ -694,6 +634,56 @@ class AdaptiveLearner:
         total_pages = row["pages"] or 0
         total_images = row["images"] or 0
 
+        # Classifier info
+        classifier_ready = self._classifier is not None
+        current_exploration_rate = self._exploration_rate()
+
+        # Check if sklearn is available
+        try:
+            from sklearn.linear_model import LogisticRegression  # noqa
+            sklearn_available = True
+        except ImportError:
+            sklearn_available = False
+
+        # Quality tracking stats from database
+        # Use thresholds from class constants
+        imp_thresh = self.QUALITY_IMPROVED_THRESHOLD
+        reg_thresh = self.QUALITY_REGRESSION_THRESHOLD
+        cursor = self._conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(CASE WHEN previous_quality_score IS NOT NULL THEN 1 END) as with_comparison,
+                AVG(quality_score) as avg_quality,
+                COUNT(CASE WHEN quality_delta > ? THEN 1 END) as improved,
+                COUNT(CASE WHEN quality_delta BETWEEN ? AND ? THEN 1 END) as unchanged,
+                COUNT(CASE WHEN quality_delta < ? THEN 1 END) as regressed,
+                AVG(CASE WHEN quality_delta > ? THEN quality_delta END) as avg_improvement,
+                AVG(CASE WHEN quality_delta < ? THEN quality_delta END) as avg_regression
+            FROM processed_files
+            WHERE quality_score IS NOT NULL
+        """, (imp_thresh, reg_thresh, imp_thresh, reg_thresh, imp_thresh, reg_thresh))
+        quality_row = cursor.fetchone()
+
+        quality_stats = {
+            "files_with_quality": quality_row["total"] or 0,
+            "files_with_comparison": quality_row["with_comparison"] or 0,
+            "avg_quality_score": quality_row["avg_quality"] or 0,
+            "quality_improved": quality_row["improved"] or 0,
+            "quality_unchanged": quality_row["unchanged"] or 0,
+            "quality_regressed": quality_row["regressed"] or 0,
+            "avg_improvement": quality_row["avg_improvement"] or 0,
+            "avg_regression": quality_row["avg_regression"] or 0,
+        }
+
+        # Calculate skip accuracy: % of skipped images that didn't hurt quality
+        # If exploration finds useful text = bad skip decision
+        # Skip accuracy = 1 - (exploration_useful / exploration_total)
+        exp_total = self._stats.get("exploration_useful", 0) + self._stats.get("exploration_empty", 0)
+        if exp_total > 0:
+            skip_accuracy = 1 - (self._stats.get("exploration_useful", 0) / exp_total)
+        else:
+            skip_accuracy = None
+
         return {
             "enabled": True,
             "db_path": str(self.db_path),
@@ -701,12 +691,17 @@ class AdaptiveLearner:
             "ocrd_records": ocrd_records,
             "useful_records": useful_records,
             "overall_useful_rate": useful_records / max(ocrd_records, 1),
-            "num_clusters": len(self._cluster_stats),
-            "clusters": cluster_info,
+            "classifier_ready": classifier_ready,
+            "sklearn_available": sklearn_available,
+            "training_samples": self._total_samples,
+            "last_train_count": self._last_train_count,
+            "exploration_rate": current_exploration_rate,
             "session_stats": self._stats.copy(),
             "processed_files": processed_files_count,
             "total_pages_processed": total_pages,
             "total_images_seen": total_images,
+            "quality_stats": quality_stats,
+            "skip_accuracy": skip_accuracy,
         }
 
     def reset(self):
@@ -718,8 +713,9 @@ class AdaptiveLearner:
         if self.db_path.exists():
             self.db_path.unlink()
 
-        self._cluster_centers = None
-        self._cluster_stats.clear()
+        self._classifier = None
+        self._total_samples = 0
+        self._last_train_count = 0
         self._stats = {
             "images_seen": 0,
             "images_skipped": 0,
@@ -729,6 +725,10 @@ class AdaptiveLearner:
             "exploration_ocrs": 0,
             "exploration_useful": 0,
             "exploration_empty": 0,
+            "quality_regressions": [],
+            "files_with_existing_md": 0,
+            "quality_improved": 0,
+            "quality_unchanged": 0,
         }
 
         if self.enabled:
@@ -1145,15 +1145,18 @@ class RetroHUD:
 
                     y += 1
                     ls = self.learner._stats
+                    exp_rate = self.learner._exploration_rate() * 100
                     self.draw_stat(y, 2, "IMAGES: ", f"{ls['images_seen']:4d}")
                     self.draw_stat(y, 18, "OCR'd: ", f"{ls['images_ocrd']:4d}")
                     self.draw_stat(y, 34, "SKIPPED: ", f"{ls['images_skipped']:4d}")
+                    self.draw_stat(y, 52, "EXPLORE: ", f"{exp_rate:4.1f}%")
 
                     # OCR efficiency: what % of OCRs found useful text
+                    y += 1
                     total_ocrd = ls['ocr_useful'] + ls['ocr_empty']
                     if total_ocrd > 0:
                         ocr_eff = ls['ocr_useful'] / total_ocrd * 100
-                        self.draw_stat(y, 52, "OCR EFF: ", f"{ocr_eff:4.1f}%")
+                        self.draw_stat(y, 2, "OCR EFF: ", f"{ocr_eff:4.1f}%")
 
                     # Second row: exploration accuracy
                     y += 1
@@ -1201,8 +1204,20 @@ def convert_windows_path(path_str: str) -> Path:
     return Path(path_str)
 
 
-def find_pdfs(directory: Path, recursive: bool = False, quiet: bool = False) -> list[Path]:
-    """Find all PDF files in directory (case-insensitive)."""
+def find_pdfs(
+    directory: Path,
+    recursive: bool = False,
+    quiet: bool = False,
+    shuffle: bool = False,
+) -> list[Path]:
+    """Find all PDF files in directory (case-insensitive).
+
+    Args:
+        directory: Directory to search
+        recursive: Search subdirectories
+        quiet: Suppress output
+        shuffle: Randomize file order (useful for learning to avoid sequential bias)
+    """
     if not quiet:
         mode = "recursively " if recursive else ""
         print(f"Searching {mode}for PDFs in: {directory}", flush=True)
@@ -1213,8 +1228,15 @@ def find_pdfs(directory: Path, recursive: bool = False, quiet: bool = False) -> 
         pdfs.extend(search(pattern))
 
     result = list(set(pdfs))
-    if not quiet:
-        print(f"Found {len(result)} PDF file(s)", flush=True)
+
+    if shuffle:
+        random.shuffle(result)
+        if not quiet:
+            print(f"Found {len(result)} PDF file(s) (shuffled for learning)", flush=True)
+    else:
+        if not quiet:
+            print(f"Found {len(result)} PDF file(s)", flush=True)
+
     return result
 
 
@@ -2117,12 +2139,44 @@ def extract_text_from_pdf(
         if learner and learner.enabled:
             # Count total images in the document
             total_images = sum(len(p.get_images(full=False)) for p in doc)
-            learner.record_file_processed(pdf_path, total_pages, total_images)
 
-            # Trigger re-clustering periodically (every 100 new outcomes)
-            db_stats = learner.get_stats()
-            if db_stats['ocrd_records'] >= 50 and db_stats['ocrd_records'] % 100 < 10:
-                learner.recluster()
+            # Score the new extraction
+            new_text = '\n'.join(pages)
+            new_metrics = _quality_scorer.score(new_text)
+
+            # Check for existing .md file to compare quality
+            md_path = pdf_path.with_suffix('.md')
+            previous_score = None
+            if md_path.exists():
+                try:
+                    existing_md = md_path.read_text(encoding='utf-8')
+                    existing_text = strip_markdown_metadata(existing_md)
+                    old_metrics = _quality_scorer.score(existing_text)
+                    previous_score = old_metrics.total_score
+                    learner._stats["files_with_existing_md"] += 1
+
+                    # Track quality changes using consistent thresholds
+                    delta = new_metrics.total_score - old_metrics.total_score
+                    if delta > AdaptiveLearner.QUALITY_IMPROVED_THRESHOLD:
+                        learner._stats["quality_improved"] += 1
+                    elif delta >= AdaptiveLearner.QUALITY_REGRESSION_THRESHOLD:
+                        learner._stats["quality_unchanged"] += 1
+                    # Regressions tracked in record_file_processed
+                except Exception:
+                    pass  # Ignore errors reading existing file
+
+            # Record with quality metrics
+            learner.record_file_processed(
+                pdf_path,
+                total_pages,
+                total_images,
+                quality_score=new_metrics.total_score,
+                quality_word_count=new_metrics.word_count,
+                previous_quality_score=previous_score,
+                extraction_mode="force_ocr" if force_ocr else ("ocr" if use_ocr else "text"),
+            )
+
+            # Classifier retraining is handled automatically in record_outcome()
     finally:
         doc.close()
 
@@ -2742,7 +2796,90 @@ def run_simple(
                     miss_rate = ls['exploration_useful'] / exp_total * 100
                     print(f"  Exploration:     {exp_total} samples, {miss_rate:.1f}% would be missed if skipped")
 
+                # Quality tracking
+                if ls.get("files_with_existing_md", 0) > 0:
+                    print(f"  Quality:         {ls['files_with_existing_md']} compared, ", end="")
+                    print(f"{ls['quality_improved']} improved, {ls['quality_unchanged']} same", end="")
+                    if ls.get("quality_regressions"):
+                        print(f", {len(ls['quality_regressions'])} regressed")
+                    else:
+                        print()
+
+            # Quality regression alerts
+            regressions = ls.get("quality_regressions", [])
+            if regressions:
+                print()
+                print("⚠️  QUALITY REGRESSION ALERT")
+                print("  The following files had lower quality scores than before:")
+                for reg in regressions[:5]:  # Show max 5
+                    print(f"    {Path(reg['path']).name}: {reg['old_score']:.2f} → {reg['new_score']:.2f} ({reg['delta']:+.2f})")
+                if len(regressions) > 5:
+                    print(f"    ... and {len(regressions) - 5} more")
+                print("  Tip: Model may have incorrectly skipped images in these files")
+
     return 1 if stats.failed_files > 0 else 0
+
+
+def print_learning_stats(stats: dict) -> None:
+    """Print formatted learning statistics."""
+    print("═" * 63)
+    print("  PDF2TXT - LEARNING STATISTICS")
+    print("═" * 63)
+    print(f"  Files processed: {stats['processed_files']:,}", end="")
+    qs = stats.get('quality_stats', {})
+    if qs.get('files_with_comparison', 0) > 0:
+        print(f"  ({qs['files_with_comparison']:,} with existing .md)")
+    else:
+        print()
+    print()
+
+    # Quality tracking section
+    if qs.get('files_with_quality', 0) > 0:
+        print("  Quality Tracking:")
+        print(f"    Average quality score: {qs['avg_quality_score']:.2f}")
+        if qs.get('files_with_comparison', 0) > 0:
+            print(f"    Quality improved: {qs['quality_improved']:,} files", end="")
+            if qs.get('avg_improvement', 0) > 0:
+                print(f" (+{qs['avg_improvement']:.1%} avg)")
+            else:
+                print()
+            print(f"    Quality unchanged: {qs['quality_unchanged']:,} files")
+            if qs['quality_regressed'] > 0:
+                print(f"    Quality regressed: {qs['quality_regressed']:,} files", end="")
+                if qs.get('avg_regression', 0) < 0:
+                    print(f" ({qs['avg_regression']:.1%} avg)  ⚠️")
+                else:
+                    print("  ⚠️")
+        print()
+
+    # OCR learning section
+    print("  OCR Learning:")
+    print(f"    Images in PDFs: {stats['total_images_seen']:,}")
+    print(f"    OCR decisions: {stats['total_records']:,}")
+    if stats['total_records'] > 0:
+        skipped = stats['total_records'] - stats['ocrd_records']
+        skip_pct = skipped / stats['total_records'] * 100
+        print(f"    Images skipped: {skipped:,} ({skip_pct:.1f}%)")
+    if stats.get('skip_accuracy') is not None:
+        print(f"    Skip accuracy: {stats['skip_accuracy']:.1%} (no quality loss)")
+    print()
+
+    # Classifier section
+    print("  Classifier:")
+    if not stats.get('sklearn_available', True):
+        print("    ✗ scikit-learn not installed (using heuristics)")
+        print("    Install with: pip install scikit-learn")
+    elif stats['classifier_ready']:
+        print(f"    ✓ Trained on {stats['training_samples']:,} samples")
+        print(f"    Exploration rate: {stats['exploration_rate']:.1%} (uncertainty-based)")
+    else:
+        needed = AdaptiveLearner.MIN_SAMPLES_FOR_PREDICTION - stats['training_samples']
+        if needed > 0:
+            print(f"    ✗ Not ready (need {needed} more samples)")
+        else:
+            print(f"    ✗ Not yet trained ({stats['training_samples']} samples available)")
+        print(f"    Exploration rate: {stats['exploration_rate']:.0%} (learning mode)")
+    print("═" * 63)
 
 
 def main() -> int:
@@ -2854,9 +2991,20 @@ def main() -> int:
         help="Reset the learning database and exit"
     )
     parser.add_argument(
-        "--learn-recluster",
+        "--learn-retrain",
         action="store_true",
-        help="Re-run clustering on collected data and exit"
+        help="Force retrain the classifier on collected data and exit"
+    )
+    parser.add_argument(
+        "--learn-shuffle",
+        action="store_true",
+        default=None,
+        help="Shuffle file order for diverse early learning (default: ON with --learn)"
+    )
+    parser.add_argument(
+        "--no-learn-shuffle",
+        action="store_true",
+        help="Process files in sorted order even with --learn"
     )
 
     args = parser.parse_args()
@@ -2877,27 +3025,7 @@ def main() -> int:
             print("Learning database not found or empty.")
             return 0
 
-        print("═" * 60)
-        print("  PDF2TXT - ADAPTIVE LEARNING STATISTICS")
-        print("═" * 60)
-        print(f"  Database: {stats['db_path']}")
-        print(f"  Processed files: {stats['processed_files']:,}")
-        print(f"  Total pages: {stats['total_pages_processed']:,}")
-        print(f"  Total images: {stats['total_images_seen']:,}")
-        print()
-        print(f"  OCR outcomes: {stats['total_records']:,} records")
-        print(f"  OCR'd images: {stats['ocrd_records']:,}")
-        print(f"  Useful results: {stats['useful_records']:,} ({stats['overall_useful_rate']:.1%})")
-        print()
-        if stats['clusters']:
-            print(f"  Clusters: {stats['num_clusters']}")
-            for c in stats['clusters']:
-                conf_bar = "█" * int(c['confidence'] * 10)
-                print(f"    #{c['id']:2d}: {c['samples']:5d} samples, "
-                      f"{c['useful_rate']:.1%} useful, conf [{conf_bar:<10}]")
-        else:
-            print("  No clusters formed yet (need more data)")
-        print("═" * 60)
+        print_learning_stats(stats)
         learner.close()
         return 0
 
@@ -2909,12 +3037,13 @@ def main() -> int:
         learner.close()
         return 0
 
-    if args.learn_recluster:
+    if args.learn_retrain:
         learner = AdaptiveLearner(db_path=learn_db_path, enabled=True)
-        print("Re-clustering OCR outcomes...")
-        learner.recluster(force=True)
+        print("Retraining classifier on OCR outcomes...")
+        learner.retrain(force=True)
         stats = learner.get_stats()
-        print(f"Formed {stats['num_clusters']} clusters from {stats['ocrd_records']} records")
+        print(f"Trained classifier on {stats['training_samples']} samples")
+        print(f"Classifier ready: {stats['classifier_ready']}")
         learner.close()
         return 0
 
@@ -2968,7 +3097,19 @@ def main() -> int:
             use_ocr = False
 
     # Find PDFs
-    pdfs = find_pdfs(directory, recursive=args.recursive, quiet=args.quiet)
+    # Determine shuffle: default ON with --learn, unless --no-learn-shuffle
+    should_shuffle = False
+    if args.learn:
+        should_shuffle = not args.no_learn_shuffle  # Default ON with --learn
+    if args.learn_shuffle:
+        should_shuffle = True  # Explicit --learn-shuffle overrides
+
+    pdfs = find_pdfs(
+        directory,
+        recursive=args.recursive,
+        quiet=args.quiet,
+        shuffle=should_shuffle,
+    )
 
     if not pdfs:
         return 0
@@ -3027,27 +3168,7 @@ def main() -> int:
         if args.learn_stats and learner:
             stats = learner.get_stats()
             print()
-            print("═" * 60)
-            print("  PDF2TXT - ADAPTIVE LEARNING STATISTICS")
-            print("═" * 60)
-            print(f"  Database: {stats['db_path']}")
-            print(f"  Processed files: {stats['processed_files']:,}")
-            print(f"  Total pages: {stats['total_pages_processed']:,}")
-            print(f"  Total images: {stats['total_images_seen']:,}")
-            print()
-            print(f"  OCR outcomes: {stats['total_records']:,} records")
-            print(f"  OCR'd images: {stats['ocrd_records']:,}")
-            print(f"  Useful results: {stats['useful_records']:,} ({stats['overall_useful_rate']:.1%})")
-            print()
-            if stats['clusters']:
-                print(f"  Clusters: {stats['num_clusters']}")
-                for c in stats['clusters']:
-                    conf_bar = "█" * int(c['confidence'] * 10)
-                    print(f"    #{c['id']:2d}: {c['samples']:5d} samples, "
-                          f"{c['useful_rate']:.1%} useful, conf [{conf_bar:<10}]")
-            else:
-                print("  No clusters formed yet (need more data)")
-            print("═" * 60)
+            print_learning_stats(stats)
 
         return result
     finally:
