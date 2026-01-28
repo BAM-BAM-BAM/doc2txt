@@ -387,7 +387,24 @@ class TestDatabaseMigration:
                     pdf_path TEXT NOT NULL,
                     page_num INTEGER NOT NULL,
                     image_index INTEGER NOT NULL,
-                    ocr_performed INTEGER NOT NULL
+                    width INTEGER,
+                    height INTEGER,
+                    area INTEGER,
+                    aspect_ratio REAL,
+                    page_y_center REAL,
+                    region TEXT,
+                    surrounding_text_density REAL,
+                    has_nearby_caption INTEGER,
+                    brightness_mean REAL,
+                    brightness_std REAL,
+                    is_mostly_white INTEGER,
+                    has_contrast INTEGER,
+                    ocr_performed INTEGER NOT NULL,
+                    text_length INTEGER,
+                    word_count INTEGER,
+                    is_useful INTEGER,
+                    cluster_id INTEGER DEFAULT -1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE learning_meta (
@@ -440,8 +457,8 @@ class TestImageFeature:
 
         vector = feature.to_vector()
 
-        # Vector should have 12 elements
-        assert len(vector) == 12
+        # Vector should have 14 elements (12 base + 2 log-area features)
+        assert len(vector) == 14
 
         # Most values should be roughly in 0-2 range after normalization
         for i, val in enumerate(vector):
