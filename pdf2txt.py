@@ -228,6 +228,10 @@ class AdaptiveLearner:
 
             CREATE INDEX IF NOT EXISTS idx_ocr_outcomes_timestamp ON ocr_outcomes(timestamp);
 
+            -- Performance indexes for classifier queries
+            CREATE INDEX IF NOT EXISTS idx_ocr_outcomes_performed ON ocr_outcomes(ocr_performed);
+            CREATE INDEX IF NOT EXISTS idx_ocr_outcomes_region_bins ON ocr_outcomes(ocr_performed, region, area, brightness_mean);
+
             CREATE TABLE IF NOT EXISTS learning_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -473,9 +477,21 @@ class AdaptiveLearner:
         )
         error_rate = errors / len(self._recent_predictions)
 
-        # Boost exploration rate by up to 30% if accuracy is poor
-        # error_rate=0 -> no boost, error_rate=1 -> +30%
-        boosted_rate = sample_rate + error_rate * 0.30
+        # Boost exploration based on error rate:
+        # - Low error (< 10%): minimal boost
+        # - Medium error (10-30%): moderate boost up to +15%
+        # - High error (30-50%): aggressive boost up to +30%
+        # - Very high error (> 50%): corpus mismatch, boost to near-max exploration
+        if error_rate > 0.50:
+            # Corpus mismatch detected - classifier is very wrong
+            # Boost exploration aggressively to gather new training data
+            boosted_rate = max(0.35, sample_rate + 0.30)
+        elif error_rate > 0.30:
+            # High error - significant boost
+            boosted_rate = sample_rate + error_rate * 0.50
+        else:
+            # Normal operation - moderate boost
+            boosted_rate = sample_rate + error_rate * 0.30
 
         return max(self.MIN_EXPLORATION_RATE, min(self.MAX_EXPLORATION_RATE, boosted_rate))
 
@@ -494,6 +510,12 @@ class AdaptiveLearner:
             return self.SKIP_VALIDATION_RATE
 
         error_rate = useful / total  # How often skips were wrong
+
+        # Very high error rate (> 30%) indicates corpus mismatch
+        # In this case, validate much more aggressively
+        if error_rate > 0.30:
+            # Corpus mismatch - validate 30-50% of skips
+            return min(0.50, 0.30 + (error_rate - 0.30))
 
         # Target: 10% error rate on skips is acceptable
         # If errors are high, validate more; if low, validate less
@@ -1366,33 +1388,33 @@ class RetroHUD:
                 # Stats row 1
                 y += 2
                 elapsed = self.stats.elapsed()
-                self.draw_stat(y, 2, "ELAPSED: ", f"{elapsed:6.1f}s")
-                self.draw_stat(y, 22, "FILES: ", f"{self.stats.processed_files}/{self.stats.total_files}")
-                self.draw_stat(y, 42, "RATE: ", f"{self.stats.files_per_min():5.1f} files/min")
+                self.draw_stat(y, 2, "ELAPSED: ", f"{elapsed:>8.1f}s")
+                self.draw_stat(y, 24, "FILES: ", f"{self.stats.processed_files:,}/{self.stats.total_files:,}")
+                self.draw_stat(y, 46, "RATE: ", f"{self.stats.files_per_min():5.1f}/min")
 
                 # Stats row 2
                 y += 1
                 mb_processed = self.stats.processed_bytes / (1024 * 1024)
                 mb_total = self.stats.total_bytes / (1024 * 1024)
-                self.draw_stat(y, 2, "PDF IN: ", f"{mb_processed:6.2f}/{mb_total:.2f} MB")
-                self.draw_stat(y, 32, "THROUGHPUT: ", f"{self.stats.mb_per_min():6.2f} MB/min")
+                self.draw_stat(y, 2, "PDF IN: ", f"{mb_processed:>7.2f}/{mb_total:.2f} MB")
+                self.draw_stat(y, 36, "THROUGHPUT: ", f"{self.stats.mb_per_min():6.2f} MB/min")
 
                 # Stats row 3 - Output and compression
                 y += 1
                 md_mb = self.stats.md_bytes / (1024 * 1024)
                 if self.stats.processed_bytes > 0:
                     ratio = (self.stats.md_bytes / self.stats.processed_bytes) * 100
-                    self.draw_stat(y, 2, "MD OUT: ", f"{md_mb:6.2f} MB")
-                    self.draw_stat(y, 26, "RATIO: ", f"{ratio:5.1f}% of input")
+                    self.draw_stat(y, 2, "MD OUT: ", f"{md_mb:>7.2f} MB")
+                    self.draw_stat(y, 28, "RATIO: ", f"{ratio:5.1f}% of input")
                 else:
-                    self.draw_stat(y, 2, "MD OUT: ", f"{md_mb:6.2f} MB")
+                    self.draw_stat(y, 2, "MD OUT: ", f"{md_mb:>7.2f} MB")
 
                 # Stats row 4 - OCR stats
                 y += 2
-                self.draw_stat(y, 2, "OCR PAGES: ", f"{self.stats.ocr_pages:5d}")
-                self.draw_stat(y, 22, "OCR CHARS: ", f"{self.stats.ocr_chars:,}")
-                status = self.stats.current_status[:30] if self.stats.current_status else "Ready"
-                self.draw_stat(y, 48, "STATUS: ", status)
+                self.draw_stat(y, 2, "OCR PAGES: ", f"{self.stats.ocr_pages:>6,}")
+                self.draw_stat(y, 24, "OCR CHARS: ", f"{self.stats.ocr_chars:>12,}")
+                status = self.stats.current_status[:25] if self.stats.current_status else "Ready"
+                self.draw_stat(y, 50, "STATUS: ", status)
 
             # Results box (taller if learning enabled)
             y_offset += box_height + 1
@@ -1426,17 +1448,18 @@ class RetroHUD:
                     y += 1
                     ls = self.learner._stats
                     exp_rate = self.learner._exploration_rate() * 100
-                    self.draw_stat(y, 2, "IMAGES: ", f"{ls['images_seen']:4d}")
-                    self.draw_stat(y, 18, "OCR'd: ", f"{ls['images_ocrd']:4d}")
-                    self.draw_stat(y, 34, "SKIPPED: ", f"{ls['images_skipped']:4d}")
-                    self.draw_stat(y, 52, "EXPLORE: ", f"{exp_rate:4.1f}%")
+                    # Use comma formatting and wider fields to prevent overflow
+                    self.draw_stat(y, 2, "IMAGES: ", f"{ls['images_seen']:>7,}")
+                    self.draw_stat(y, 20, "OCR'd: ", f"{ls['images_ocrd']:>6,}")
+                    self.draw_stat(y, 36, "SKIP: ", f"{ls['images_skipped']:>6,}")
+                    self.draw_stat(y, 52, "EXPLORE: ", f"{exp_rate:5.1f}%")
 
                     # OCR efficiency: what % of OCRs found useful text
                     y += 1
                     total_ocrd = ls['ocr_useful'] + ls['ocr_empty']
                     if total_ocrd > 0:
                         ocr_eff = ls['ocr_useful'] / total_ocrd * 100
-                        self.draw_stat(y, 2, "OCR EFF: ", f"{ocr_eff:4.1f}%")
+                        self.draw_stat(y, 2, "OCR EFF: ", f"{ocr_eff:5.1f}%")
 
                     # Second row: exploration accuracy
                     y += 1
@@ -1444,11 +1467,11 @@ class RetroHUD:
                     if exp_total > 0:
                         # Miss rate: exploration found useful text we would've skipped
                         miss_rate = ls['exploration_useful'] / exp_total * 100
-                        self.draw_stat(y, 2, "EXPLORE: ", f"{exp_total:4d}")
-                        self.draw_stat(y, 18, "WOULD MISS: ", f"{ls['exploration_useful']:3d}")
+                        self.draw_stat(y, 2, "EXPLORE: ", f"{exp_total:>6,}")
+                        self.draw_stat(y, 20, "WOULD MISS: ", f"{ls['exploration_useful']:>5,}")
                         # Color code: green if low miss rate, red if high
                         miss_color = curses.color_pair(4) if miss_rate > 20 else curses.color_pair(1)
-                        self.stdscr.addstr(y, 48, f"MISS RATE: {miss_rate:4.1f}%", miss_color | curses.A_BOLD)
+                        self.stdscr.addstr(y, 48, f"MISS RATE: {miss_rate:5.1f}%", miss_color | curses.A_BOLD)
 
             # Log box
             y_offset += results_height + 1
@@ -3147,8 +3170,12 @@ def print_learning_stats(stats: dict) -> None:
     if stats.get('skip_validation_total', 0) > 0:
         sv_total = stats['skip_validation_total']
         sv_useful = stats['skip_validation_useful']
-        sv_error = stats.get('skip_validation_error_rate', 0)
+        sv_error = stats.get('skip_validation_error_rate', 0) or 0
         print(f"    Skip validation: {sv_total} tested, {sv_useful} useful ({sv_error:.0%} error rate)")
+        # Warn about corpus mismatch when error rate is very high
+        if sv_error > 0.30:
+            print(f"    ⚠️  HIGH MISS RATE: Classifier may be trained on different document types")
+            print(f"       Consider: ./pdf2txt.py --learn-reset to retrain on this corpus")
     print()
 
     # Classifier section
