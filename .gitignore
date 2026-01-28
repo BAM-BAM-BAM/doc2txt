@@ -20,3 +20,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+gpu_log.csv
+*.log
