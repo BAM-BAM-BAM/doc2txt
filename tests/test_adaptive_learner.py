@@ -19,25 +19,25 @@ from pdf2txt import (
 )
 
 
-class TestTextQualityScorer:
+class TestQualTextQualityScorer:
     """Tests for TextQualityScorer usefulness determination."""
 
     @pytest.fixture
     def scorer(self):
         return TextQualityScorer()
 
-    def test_rejects_empty_text(self, scorer):
+    def test_bound_rejects_empty_text(self, scorer):
         """Empty text should have zero quality."""
         metrics = scorer.score("")
         assert metrics.total_score == 0
         assert metrics.word_count == 0
 
-    def test_rejects_whitespace_only(self, scorer):
+    def test_bound_rejects_whitespace_only(self, scorer):
         """Whitespace-only text should have zero quality."""
         metrics = scorer.score("   \n\t\n   ")
         assert metrics.total_score == 0
 
-    def test_rejects_gibberish(self, scorer):
+    def test_qual_rejects_gibberish(self, scorer):
         """Gibberish text should have low quality score."""
         gibberish = "xkcd qwerty asdfgh zxcvbn hjkl poiuy"
         metrics = scorer.score(gibberish)
@@ -46,7 +46,7 @@ class TestTextQualityScorer:
         # Total score should be low
         assert metrics.total_score < 0.3
 
-    def test_accepts_real_english_text(self, scorer):
+    def test_qual_accepts_real_english_text(self, scorer):
         """Real English text should have high quality score."""
         real_text = """
         The quick brown fox jumps over the lazy dog. This is a sample
@@ -59,20 +59,20 @@ class TestTextQualityScorer:
         # Total score should be above usefulness threshold
         assert metrics.total_score > AdaptiveLearner.USEFUL_QUALITY_THRESHOLD
 
-    def test_penalizes_encoding_artifacts(self, scorer):
+    def test_qual_penalizes_encoding_artifacts(self, scorer):
         """Text with encoding artifacts should be penalized."""
         # Common encoding issues
         bad_text = "The â€œquickâ€ brown fox Ã© jumped"
         metrics = scorer.score(bad_text)
         assert metrics.gibberish_penalty > 0
 
-    def test_penalizes_repeated_characters(self, scorer):
+    def test_qual_penalizes_repeated_characters(self, scorer):
         """Text with repeated characters should be penalized."""
         bad_text = "Helloooooo world thissss is badddd text"
         metrics = scorer.score(bad_text)
         assert metrics.gibberish_penalty > 0
 
-    def test_quality_thresholds_for_usefulness(self, scorer):
+    def test_qual_thresholds_for_usefulness(self, scorer):
         """Test that quality thresholds correctly identify useful text."""
         # Text that should be useful (quality > 0.2, word_ratio > 0.2)
         useful_text = "The document contains important information about the project."
@@ -89,7 +89,7 @@ class TestTextQualityScorer:
         assert not is_useful, f"Expected not useful: score={metrics.total_score}, ratio={metrics.real_word_ratio}"
 
 
-class TestAdaptiveLearnerUncertaintyExploration:
+class TestEvalUncertaintyExploration:
     """Tests for uncertainty-based exploration."""
 
     @pytest.fixture
@@ -103,7 +103,7 @@ class TestAdaptiveLearnerUncertaintyExploration:
             yield learner
             learner.close()
 
-    def test_uncertainty_highest_at_half(self, learner):
+    def test_eval_uncertainty_highest_at_half(self, learner):
         """Uncertainty should be highest when probability is 0.5."""
         # Test the uncertainty calculation directly
         # uncertainty = 1 - abs(prob - 0.5) * 2
@@ -123,7 +123,7 @@ class TestAdaptiveLearnerUncertaintyExploration:
         uncertainty_quarter = 1 - abs(0.25 - 0.5) * 2
         assert uncertainty_quarter == 0.5
 
-    def test_exploration_more_likely_when_uncertain(self, learner):
+    def test_eval_exploration_more_likely_when_uncertain(self, learner):
         """Exploration should trigger more often for uncertain predictions."""
         # Run many trials and count exploration triggers
         n_trials = 1000
@@ -153,7 +153,7 @@ class TestAdaptiveLearnerUncertaintyExploration:
             f"Expected similar exploration at extremes: 0.1={explore_at_01}, 0.9={explore_at_09}"
 
 
-class TestAdaptiveLearnerDatabase:
+class TestIntAdaptiveLearnerDatabase:
     """Tests for database operations and quality tracking."""
 
     @pytest.fixture
@@ -165,7 +165,7 @@ class TestAdaptiveLearnerDatabase:
             yield learner
             learner.close()
 
-    def test_quality_columns_exist(self, learner):
+    def test_schema_quality_columns_exist(self, learner):
         """Database should have quality tracking columns."""
         cursor = learner._conn.execute("PRAGMA table_info(processed_files)")
         columns = {row[1] for row in cursor.fetchall()}
@@ -180,7 +180,7 @@ class TestAdaptiveLearnerDatabase:
         assert expected_columns.issubset(columns), \
             f"Missing columns: {expected_columns - columns}"
 
-    def test_record_file_processed_stores_quality(self, learner):
+    def test_int_record_stores_quality(self, learner):
         """record_file_processed should store quality metrics."""
         # Create a temp PDF file for hashing
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
@@ -213,7 +213,7 @@ class TestAdaptiveLearnerDatabase:
         finally:
             pdf_path.unlink()
 
-    def test_quality_regression_tracked(self, learner):
+    def test_int_quality_regression_tracked(self, learner):
         """Quality regressions should be tracked in session stats."""
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
             f.write(b'%PDF-1.4 fake pdf content')
@@ -240,7 +240,7 @@ class TestAdaptiveLearnerDatabase:
         finally:
             pdf_path.unlink()
 
-    def test_small_quality_change_not_regression(self, learner):
+    def test_int_small_quality_change_not_regression(self, learner):
         """Small quality decreases should not be flagged as regressions."""
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
             f.write(b'%PDF-1.4 fake pdf content')
@@ -265,17 +265,17 @@ class TestAdaptiveLearnerDatabase:
             pdf_path.unlink()
 
 
-class TestAdaptiveLearnerThresholds:
+class TestInvAdaptiveLearnerThresholds:
     """Tests for threshold consistency."""
 
-    def test_threshold_constants_defined(self):
+    def test_inv_threshold_constants_defined(self):
         """All threshold constants should be defined."""
         assert hasattr(AdaptiveLearner, 'USEFUL_QUALITY_THRESHOLD')
         assert hasattr(AdaptiveLearner, 'USEFUL_WORD_RATIO_THRESHOLD')
         assert hasattr(AdaptiveLearner, 'QUALITY_IMPROVED_THRESHOLD')
         assert hasattr(AdaptiveLearner, 'QUALITY_REGRESSION_THRESHOLD')
 
-    def test_threshold_values_reasonable(self):
+    def test_inv_threshold_values_reasonable(self):
         """Threshold values should be reasonable."""
         # Quality thresholds should be between 0 and 1
         assert 0 < AdaptiveLearner.USEFUL_QUALITY_THRESHOLD < 1
@@ -287,7 +287,7 @@ class TestAdaptiveLearnerThresholds:
         # Regression threshold should be negative
         assert AdaptiveLearner.QUALITY_REGRESSION_THRESHOLD < 0
 
-    def test_thresholds_cover_all_cases(self):
+    def test_inv_thresholds_cover_all_cases(self):
         """Improved + unchanged + regressed should cover all cases."""
         # The thresholds should not have gaps
         imp = AdaptiveLearner.QUALITY_IMPROVED_THRESHOLD
@@ -312,10 +312,10 @@ class TestAdaptiveLearnerThresholds:
                 f"Delta {delta} falls into {len(categories)} categories: {categories}"
 
 
-class TestFindPdfsShuffle:
+class TestIntFindDocsShuffle:
     """Tests for file shuffling functionality."""
 
-    def test_shuffle_produces_different_order(self):
+    def test_eval_shuffle_produces_different_order(self):
         """Shuffle should produce different orderings."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -341,7 +341,7 @@ class TestFindPdfsShuffle:
             assert pdfs_shuffled1 != pdfs_sorted or pdfs_shuffled2 != pdfs_sorted, \
                 "Shuffle should produce different order"
 
-    def test_shuffle_with_single_file(self):
+    def test_bound_shuffle_with_single_file(self):
         """Shuffle should work with single file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -350,7 +350,7 @@ class TestFindPdfsShuffle:
             pdfs = find_pdfs(tmppath, shuffle=True, quiet=True)
             assert len(pdfs) == 1
 
-    def test_shuffle_with_empty_directory(self):
+    def test_bound_shuffle_with_empty_directory(self):
         """Shuffle should work with empty directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -358,10 +358,10 @@ class TestFindPdfsShuffle:
             assert len(pdfs) == 0
 
 
-class TestDatabaseMigration:
+class TestSchemaDatabaseMigration:
     """Tests for database migration of existing databases."""
 
-    def test_migration_adds_quality_columns(self):
+    def test_schema_migration_adds_quality_columns(self):
         """Migration should add quality columns to old databases."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "old_learning.db"
@@ -433,10 +433,10 @@ class TestDatabaseMigration:
             learner.close()
 
 
-class TestImageFeature:
+class TestSchemaImageFeature:
     """Tests for ImageFeature dataclass."""
 
-    def test_to_vector_normalization(self):
+    def test_inv_to_vector_normalization(self):
         """Feature vector should have normalized values."""
         feature = ImageFeature(
             width=500,
@@ -462,7 +462,7 @@ class TestImageFeature:
         for i, val in enumerate(vector):
             assert -1 <= val <= 10, f"Vector element {i} = {val} seems out of range"
 
-    def test_to_dict_and_back(self):
+    def test_schema_to_dict_and_back(self):
         """Feature should round-trip through dict."""
         original = ImageFeature(
             width=500,
