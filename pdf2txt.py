@@ -2093,6 +2093,27 @@ def main() -> int:
         help="Process files in sorted order even with --learn"
     )
 
+    # Watch mode arguments
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch directories for new/modified documents and process them automatically"
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=30,
+        metavar="MINUTES",
+        help="Minutes between directory scans in watch mode (default: 30)"
+    )
+    parser.add_argument(
+        "--cooldown",
+        type=int,
+        default=10,
+        metavar="MINUTES",
+        help="Minutes since last file modification before processing (default: 10)"
+    )
+
     args = parser.parse_args()
 
     # Force CPU mode if requested (must be set before any CUDA imports)
@@ -2143,6 +2164,43 @@ def main() -> int:
     if not directory.is_dir():
         print(f"Error: Path is not a directory: {directory}", file=sys.stderr)
         return 1
+
+    # Watch mode
+    if args.watch:
+        import logging
+        from pdf2txt_watcher import WatchConfig, FolderWatcher
+
+        log_level = logging.DEBUG if args.verbose else logging.INFO
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+        formats = None
+        if hasattr(args, 'formats') and args.formats:
+            formats = {f".{f.lstrip('.')}" for f in args.formats.split(",")}
+
+        config = WatchConfig(
+            watch_dirs=[directory],
+            poll_interval_minutes=args.poll_interval,
+            cooldown_minutes=args.cooldown,
+            formats=formats or set(SUPPORTED_EXTENSIONS),
+            recursive=args.recursive,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+            use_ocr=not args.no_ocr,
+            ocr_engine=args.ocr_engine,
+            force_ocr=getattr(args, 'force_ocr', False),
+            verbose=args.verbose,
+        )
+
+        watcher = FolderWatcher(config)
+        try:
+            watcher.run()
+        finally:
+            watcher.close()
+        return 0
 
     # Check OCR availability
     use_ocr = not args.no_ocr
