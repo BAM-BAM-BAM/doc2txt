@@ -1,11 +1,11 @@
-# pdf2txt Review Triggers
+# doc2txt Review Triggers
 
 When to pause and think before committing. The goal is to turn review insights
 into automated tests -- if you find yourself checking the same thing twice,
 write a test instead.
 
 This file does NOT contain: Generic FGT methodology (see `FGT.md`),
-domain rules (see `FGT_DOMAIN_PDF.md`), code patterns (see `PATTERNS_PDF.md`).
+domain rules (see `FGT_DOMAIN_DOC.md`), code patterns (see `PATTERNS_DOC.md`).
 
 ---
 
@@ -29,7 +29,7 @@ domain rules (see `FGT_DOMAIN_PDF.md`), code patterns (see `PATTERNS_PDF.md`).
 
 - Does similar functionality already exist? (Don't duplicate)
 - What modules does this change affect? (Identify contracts)
-- What domain rules apply? (Check `FGT_DOMAIN_PDF.md`)
+- What domain rules apply? (Check `FGT_DOMAIN_DOC.md`)
 
 ## Post-Implementation
 

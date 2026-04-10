@@ -1,9 +1,9 @@
-"""Text quality scoring for pdf2txt."""
+"""Text quality scoring for doc2txt."""
 
 import math
 import re
 
-from pdf2txt_models import QualityMetrics
+from doc2txt_models import QualityMetrics
 
 
 class TextQualityScorer:

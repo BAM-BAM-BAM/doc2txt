@@ -1,20 +1,20 @@
-# Learnings from pdf2txt for the Event Scraper/Planner App
+# Learnings from doc2txt for the Event Scraper/Planner App
 
 > **STATUS: INTEGRATED** -- Key lessons from this document have been integrated into
-> `FGT_LOG.md` (entries PDF-001 through PDF-007), `BUG_PATTERNS_PDF.md` (BUG-001 through
-> BUG-003), and `FGT_DOMAIN_PDF.md` (pitfalls, invariants, domain constants). This file
+> `FGT_LOG.md` (entries PDF-001 through PDF-007), `BUG_PATTERNS_DOC.md` (BUG-001 through
+> BUG-003), and `FGT_DOMAIN_DOC.md` (pitfalls, invariants, domain constants). This file
 > is retained as historical reference. New lessons should go directly into the FGT files.
 
 ## Purpose
 
-This document captures hard-won lessons from 24 commits of iterative development on a PDF text extraction tool (`pdf2txt`). It's written for a new Claude Code instance building a social event scraping and aggregation app, so you can avoid the same evolutionary pain and get things right from the start.
+This document captures hard-won lessons from 24 commits of iterative development on a PDF text extraction tool (`doc2txt`). It's written for a new Claude Code instance building a social event scraping and aggregation app, so you can avoid the same evolutionary pain and get things right from the start.
 
 ---
 
 ## 1. Architecture: Don't Build a Monolith
 
-### What happened in pdf2txt
-The entire project ended up as a **single 3,496-line Python file** (`pdf2txt.py`) containing 30+ classes and functions covering: data models, OCR engines, adaptive ML learning, a curses-based HUD, file I/O, multiprocessing workers, argument parsing, and more. This happened incrementally — each feature seemed small enough to add inline, until it wasn't.
+### What happened in doc2txt
+The entire project ended up as a **single 3,496-line Python file** (`doc2txt.py`) containing 30+ classes and functions covering: data models, OCR engines, adaptive ML learning, a curses-based HUD, file I/O, multiprocessing workers, argument parsing, and more. This happened incrementally — each feature seemed small enough to add inline, until it wasn't.
 
 ### What to do differently
 Start with **module separation from commit #1**:
@@ -41,7 +41,7 @@ event_app/
 
 ## 2. The Scraper Fragility Problem (Lessons from OCR Fragility)
 
-### What happened in pdf2txt
+### What happened in doc2txt
 OCR was inherently fragile — different PDF types needed different handling:
 - Scanned docs needed full-page OCR
 - Digital PDFs with images needed "hybrid" mode
@@ -68,7 +68,7 @@ Web scrapers are even more fragile than OCR. Plan for failure from day one:
    - Auto-disable scrapers that fail >3 consecutive times
    - Alert when a previously-healthy scraper starts degrading
 
-3. **Don't try to be clever with detection heuristics early**. In pdf2txt, `page_needs_ocr()` was a clever heuristic that was eventually removed in favor of a simpler approach. Start with the simplest extraction logic per source, then optimize.
+3. **Don't try to be clever with detection heuristics early**. In doc2txt, `page_needs_ocr()` was a clever heuristic that was eventually removed in favor of a simpler approach. Start with the simplest extraction logic per source, then optimize.
 
 4. **Pin your selectors/parsing logic as "scraper configs"** that are easy to update when a website changes its HTML structure, rather than hardcoding CSS selectors deep in logic.
 
@@ -76,12 +76,12 @@ Web scrapers are even more fragile than OCR. Plan for failure from day one:
 
 ## 3. FGT Methodology: Apply It From Day Zero, Properly
 
-### What happened in pdf2txt
+### What happened in doc2txt
 FGT docs were added in **commit 23 of 24** — essentially retroactively. Worse:
 - `FGT_LOG.md` is completely empty (no lessons were ever recorded)
-- `PATTERNS_PDF.md` contains React Flow / TypeScript patterns from a *different* project (a financial visualization tool), not PDF/Python patterns
-- `REVIEWS_PDF.md` references VE (another project's) review types, config schemas, and React components
-- `FGT_DOMAIN_PDF.md` has only skeleton content ("Add patterns as discovered during development")
+- `PATTERNS_DOC.md` contains React Flow / TypeScript patterns from a *different* project (a financial visualization tool), not PDF/Python patterns
+- `REVIEWS_DOC.md` references VE (another project's) review types, config schemas, and React components
+- `FGT_DOMAIN_DOC.md` has only skeleton content ("Add patterns as discovered during development")
 
 The FGT framework was **cargo-culted from another project** without being adapted to this one's actual needs.
 
@@ -116,13 +116,13 @@ After every bug fix, record: what broke, why FGT didn't catch it, what invariant
 
 ## 4. Testing: Write Tests Alongside Features, Not After
 
-### What happened in pdf2txt
+### What happened in doc2txt
 Tests (`test_adaptive_learner.py`, 22 tests) were added only after the adaptive learning system was fully built. By then:
 - The feature vector size had already changed once (12 → 14 elements), breaking assumptions
 - Database migrations were needed for schema changes
 - The ML model had already been swapped (LogisticRegression → DecisionTreeClassifier)
 
-The test file imports directly from the monolithic `pdf2txt.py`, making it hard to test components in isolation.
+The test file imports directly from the monolithic `doc2txt.py`, making it hard to test components in isolation.
 
 ### What to do differently
 1. **Write scraper tests first** — even before the scraper works:
@@ -142,7 +142,7 @@ The test file imports directly from the monolithic `pdf2txt.py`, making it hard 
 
 ## 5. Dependency Management: Pin Everything Early
 
-### What happened in pdf2txt
+### What happened in doc2txt
 - `transformers` 5.0.0 broke `surya-ocr` — had to pin to 4.57.x
 - PaddleOCR and Surya have conflicting VRAM requirements
 - GPU memory management required manual `clear_gpu_memory()` calls
@@ -159,7 +159,7 @@ The test file imports directly from the monolithic `pdf2txt.py`, making it hard 
 
 ## 6. The Heuristic → ML Evolution (Avoid It)
 
-### What happened in pdf2txt
+### What happened in doc2txt
 The project went through this evolution:
 1. Simple heuristic: `page_needs_ocr()` — didn't work well
 2. Removed heuristic, brute force: OCR everything
@@ -180,7 +180,7 @@ This was **12 commits of incremental ML complexity** that could have been avoide
 
 ## 7. Database Schema: Design for Migration From Day One
 
-### What happened in pdf2txt
+### What happened in doc2txt
 The database schema evolved through multiple migrations:
 - Added `quality_score`, `quality_word_count`, `previous_quality_score`, `quality_delta`, `extraction_mode` columns
 - Added indexes on `ocr_performed` and composite indexes for performance
@@ -221,7 +221,7 @@ The database schema evolved through multiple migrations:
 ## 8. FGT Bidirectional Updates
 
 ### What should go back into the core FGT.md
-Based on pdf2txt's experience, these additions would improve FGT for any project:
+Based on doc2txt's experience, these additions would improve FGT for any project:
 
 1. **New Pillar Candidate — "Scaffold Before Building"**:
    > Set up module structure, FGT domain files, test framework, and CI before writing the first feature. Retroactive adoption of methodology is significantly less effective than proactive adoption.
@@ -238,7 +238,7 @@ Based on pdf2txt's experience, these additions would improve FGT for any project
    > - The problem needs a fundamentally different solution
    > - The complexity is justified by measurable improvement
 
-### What pdf2txt's FGT_DOMAIN_PDF.md should be updated with
+### What doc2txt's FGT_DOMAIN_DOC.md should be updated with
 Based on what was actually learned (but never recorded):
 
 - **Bug Pattern**: `page_needs_ocr()` heuristics fail on PDFs with embedded fonts that report text layers but contain no extractable text
@@ -287,4 +287,4 @@ Based on what was actually learned (but never recorded):
 
 ---
 
-*Generated from analysis of pdf2txt project (24 commits, 3,496 LOC) on 2026-04-05*
+*Generated from analysis of doc2txt project (24 commits, 3,496 LOC) on 2026-04-05*

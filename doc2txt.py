@@ -11,7 +11,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from pdf2txt_models import (
+from doc2txt_models import (
     __version__,
     SUPPORTED_EXTENSIONS,
     QualityMetrics,  # noqa: F401 (re-exported for tests)
@@ -20,16 +20,16 @@ from pdf2txt_models import (
     ProcessingStats,
     FileResult,
 )
-from pdf2txt_quality import TextQualityScorer, strip_markdown_metadata, _quality_scorer  # noqa: F401 (TextQualityScorer re-exported)
-from pdf2txt_learning import AdaptiveLearner
-from pdf2txt_hud import RetroHUD
+from doc2txt_quality import TextQualityScorer, strip_markdown_metadata, _quality_scorer  # noqa: F401 (TextQualityScorer re-exported)
+from doc2txt_learning import AdaptiveLearner
+from doc2txt_hud import RetroHUD
 
 # Use spawn to avoid terminal/curses issues with fork
 _mp_context = multiprocessing.get_context("spawn")
 
 
 # ClusterStats removed - now using supervised classifier instead of clustering
-# AdaptiveLearner moved to pdf2txt_learning.py
+# AdaptiveLearner moved to doc2txt_learning.py
 def convert_windows_path(path_str: str) -> Path:
     """Convert Windows-style path to WSL path if needed."""
     windows_pattern = r'^([A-Za-z]):[/\\](.*)$'
@@ -1931,7 +1931,7 @@ def print_learning_stats(stats: dict) -> None:
         # Warn about corpus mismatch when error rate is very high
         if sv_error > 0.30:
             print("    ⚠️  HIGH MISS RATE: Classifier may be trained on different document types")
-            print("       Consider: ./pdf2txt.py --learn-reset to retrain on this corpus")
+            print("       Consider: ./doc2txt.py --learn-reset to retrain on this corpus")
     print()
 
     # Classifier section
@@ -2064,7 +2064,7 @@ def main() -> int:
         "--learn-db",
         type=str,
         metavar="PATH",
-        help="Custom path for learning database (default: ~/.pdf2txt/learning.db)"
+        help="Custom path for learning database (default: ~/.doc2txt/learning.db)"
     )
     parser.add_argument(
         "--learn-stats",
@@ -2168,7 +2168,7 @@ def main() -> int:
     # Watch mode
     if args.watch:
         import logging
-        from pdf2txt_watcher import WatchConfig, FolderWatcher
+        from doc2txt_watcher import WatchConfig, FolderWatcher
 
         log_level = logging.DEBUG if args.verbose else logging.INFO
         logging.basicConfig(

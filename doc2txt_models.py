@@ -1,4 +1,4 @@
-"""Data models and constants for pdf2txt."""
+"""Data models and constants for doc2txt."""
 
 import math
 import time

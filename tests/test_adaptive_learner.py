@@ -11,7 +11,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pdf2txt import (
+from doc2txt import (
     AdaptiveLearner,
     ImageFeature,
     TextQualityScorer,

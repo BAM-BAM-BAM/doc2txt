@@ -1,4 +1,4 @@
-"""Tests for folder watcher (pdf2txt_watcher.py).
+"""Tests for folder watcher (doc2txt_watcher.py).
 
 FGT categories:
   INV-*  : Watcher invariants
@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pdf2txt_watcher import (
+from doc2txt_watcher import (
     FileReadinessChecker,
     ProcessedTracker,
     FolderWatcher,

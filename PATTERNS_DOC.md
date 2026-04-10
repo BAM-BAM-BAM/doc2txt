@@ -1,10 +1,10 @@
-# pdf2txt Code Patterns
+# doc2txt Code Patterns
 
 Project-specific implementation patterns for document text extraction.
 Supplements the generic methodology in [FGT.md](FGT.md).
 
 This file does NOT contain: Generic FGT methodology (see `FGT.md`),
-domain rules (see `FGT_DOMAIN_PDF.md`), review triggers (see `REVIEWS_PDF.md`).
+domain rules (see `FGT_DOMAIN_DOC.md`), review triggers (see `REVIEWS_DOC.md`).
 
 ---
 
@@ -15,7 +15,7 @@ domain rules (see `FGT_DOMAIN_PDF.md`), review triggers (see `REVIEWS_PDF.md`).
 The canonical set of supported extensions lives in one place:
 
 ```python
-# pdf2txt.py (top-level constant)
+# doc2txt.py (top-level constant)
 SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.rtf', '.odt'}
 ```
 
@@ -75,7 +75,7 @@ def process_batch(documents: list[Path]) -> tuple[list[Result], list[Error]]:
 ```
 
 **When to apply:** Any pipeline where items are independent and partial
-results are useful. pdf2txt processes each document independently -- one
+results are useful. doc2txt processes each document independently -- one
 corrupted file shouldn't block the rest.
 
 ---
@@ -139,13 +139,13 @@ def test_pro_no_hardcoded_extensions():
 
 ## Module Size Enforcement
 
-The codebase is currently a single 3,496-line file (`pdf2txt.py`).
+The codebase is currently a single 3,496-line file (`doc2txt.py`).
 This is a known technical debt item (see BACKLOG.md).
 
 **Target structure after modularization:**
 
 ```
-pdf2txt/
+doc2txt/
   __init__.py
   cli.py           # Argument parsing
   extractors/      # One per format

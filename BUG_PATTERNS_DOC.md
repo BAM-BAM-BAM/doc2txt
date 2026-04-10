@@ -1,4 +1,4 @@
-# pdf2txt Bug Patterns
+# doc2txt Bug Patterns
 
 Bug catalog for escaped bugs. Each entry links to the prevention principle it violated
 (see [FGT.md](FGT.md) Prevention Principles).

@@ -1,4 +1,4 @@
-# pdf2txt
+# doc2txt
 
 Extract text from PDFs and create markdown files with OCR support and parallel processing.
 
@@ -15,8 +15,8 @@ Extract text from PDFs and create markdown files with OCR support and parallel p
 
 ```bash
 # Clone the repository
-git clone https://github.com/BAM-BAM-BAM/pdf2txt.git
-cd pdf2txt
+git clone https://github.com/BAM-BAM-BAM/doc2txt.git
+cd doc2txt
 
 # Create virtual environment
 python3 -m venv .venv
@@ -41,32 +41,32 @@ pip install surya-ocr
 
 ```bash
 # Basic usage - process all PDFs in a directory
-./pdf2txt.py /path/to/pdfs
+./doc2txt.py /path/to/pdfs
 
 # Recursive search with verbose output
-./pdf2txt.py -r -v /path/to/pdfs
+./doc2txt.py -r -v /path/to/pdfs
 
 # Use the retro HUD display
-./pdf2txt.py -r --hud /path/to/pdfs
+./doc2txt.py -r --hud /path/to/pdfs
 
 # Control parallel workers (default: CPU count)
-./pdf2txt.py -r -j 8 /path/to/pdfs    # Use 8 workers
-./pdf2txt.py -r -j 1 /path/to/pdfs    # Sequential processing
+./doc2txt.py -r -j 8 /path/to/pdfs    # Use 8 workers
+./doc2txt.py -r -j 1 /path/to/pdfs    # Sequential processing
 
 # Use Surya for higher accuracy OCR
-./pdf2txt.py -r --ocr-engine surya /path/to/pdfs
+./doc2txt.py -r --ocr-engine surya /path/to/pdfs
 
 # Re-extract and improve existing files
-./pdf2txt.py -r --improve /path/to/pdfs
+./doc2txt.py -r --improve /path/to/pdfs
 
 # Dry run - show what would be processed
-./pdf2txt.py -r -n /path/to/pdfs
+./doc2txt.py -r -n /path/to/pdfs
 
 # Force overwrite existing markdown files
-./pdf2txt.py -r -f /path/to/pdfs
+./doc2txt.py -r -f /path/to/pdfs
 
 # Disable OCR
-./pdf2txt.py -r --no-ocr /path/to/pdfs
+./doc2txt.py -r --no-ocr /path/to/pdfs
 ```
 
 ## CLI Options

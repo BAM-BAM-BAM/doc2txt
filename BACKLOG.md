@@ -9,18 +9,18 @@ If it's not in this file, it doesn't exist.
 ## Open
 
 ### Architecture
-- [ ] Further split pdf2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_PDF.md target structure
+- [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
 ### Documentation
-- [ ] Expand FGT_DOMAIN_PDF.md with additional bug patterns as discovered -- source: FGT methodology
+- [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
 
 ## Resolved
 
 ### Architecture (2026-04-10)
-- [x] Modularize pdf2txt.py into separate modules -- split to pdf2txt_models.py (175), pdf2txt_quality.py (130), pdf2txt_learning.py (904), pdf2txt_hud.py (274), pdf2txt.py (2,278)
-- [x] Extract AdaptiveLearner into its own module -- pdf2txt_learning.py
-- [x] Extract TextQualityScorer to quality.py -- pdf2txt_quality.py
-- [x] Extract HUD/curses display to hud.py -- pdf2txt_hud.py
+- [x] Modularize doc2txt.py into separate modules -- split to doc2txt_models.py (175), doc2txt_quality.py (130), doc2txt_learning.py (904), doc2txt_hud.py (274), doc2txt.py (2,278)
+- [x] Extract AdaptiveLearner into its own module -- doc2txt_learning.py
+- [x] Extract TextQualityScorer to quality.py -- doc2txt_quality.py
+- [x] Extract HUD/curses display to hud.py -- doc2txt_hud.py
 
 ### Testing (2026-04-10)
 - [x] Add QUAL-001 test for extraction output quality -- test_fgt_categories.py

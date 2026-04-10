@@ -1,4 +1,4 @@
-# FGT Development Log: pdf2txt
+# FGT Development Log: doc2txt
 
 | Date | Task ID | Summary | Lessons |
 |------|---------|---------|---------|
@@ -72,7 +72,7 @@
 
 ### 2026-04-09: FGT retrofit and cargo-cult detection (PDF-007)
 
-**Change**: FGT methodology files were added in commit 23 of 24. PATTERNS_PDF.md and REVIEWS_PDF.md were copied from the VE project without adaptation.
+**Change**: FGT methodology files were added in commit 23 of 24. PATTERNS_DOC.md and REVIEWS_DOC.md were copied from the VE project without adaptation.
 
 **Lessons**:
 - Cargo-culting FGT files provides false confidence -- the wrong-domain content is never consulted
@@ -82,7 +82,7 @@
 
 ### 2026-04-09: Multi-format document support (DOC-001)
 
-**Change**: Extended pdf2txt to process DOCX, DOC, RTF, and ODT files alongside PDFs.
+**Change**: Extended doc2txt to process DOCX, DOC, RTF, and ODT files alongside PDFs.
 
 **Approach**: Added `extract_text()` dispatcher that routes by file extension. DOCX uses python-docx directly; DOC/RTF/ODT convert via LibreOffice headless to DOCX first. All extractors return `list[str]` (sections of text) -- the existing pipeline (quality scoring, parallel processing, HUD, improve mode) works unchanged.
 

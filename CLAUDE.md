@@ -1,9 +1,9 @@
-# pdf2txt - Project Instructions
+# doc2txt - Project Instructions
 
 ## FGT Domain Files (MANDATORY)
 
-FGT domain files (`PATTERNS_PDF.md`, `REVIEWS_PDF.md`, `FGT_DOMAIN_PDF.md`,
-`BUG_PATTERNS_PDF.md`) must be **written from scratch** for this project's domain.
+FGT domain files (`PATTERNS_DOC.md`, `REVIEWS_DOC.md`, `FGT_DOMAIN_DOC.md`,
+`BUG_PATTERNS_DOC.md`) must be **written from scratch** for this project's domain.
 Copying from another project is an anti-pattern -- it provides false confidence and the
 wrong domain content will never be consulted.
 
@@ -13,7 +13,7 @@ Before EVERY commit, run:
 
 ```bash
 python3 -m pytest tests/ -v    # ALL tests must pass
-python3 -c "import pdf2txt"    # Verify import succeeds
+python3 -c "import doc2txt"    # Verify import succeeds
 ```
 
 NEVER trust stale test results from previous sessions or compacted context. Re-run every time.
@@ -23,8 +23,8 @@ NEVER trust stale test results from previous sessions or compacted context. Re-r
 When fixing ANY bug, you MUST complete ALL steps before committing:
 
 1. **Fix the instance** -- resolve the specific reported problem
-2. **Abstract to class** -- identify the bug CATEGORY using the principles in `BUG_PATTERNS_PDF.md`
-3. **Add BUG-XXX entry** -- document in `BUG_PATTERNS_PDF.md` with: Symptom, Root Cause, Fix, Principle Violated
+2. **Abstract to class** -- identify the bug CATEGORY using the principles in `BUG_PATTERNS_DOC.md`
+3. **Add BUG-XXX entry** -- document in `BUG_PATTERNS_DOC.md` with: Symptom, Root Cause, Fix, Principle Violated
 4. **Add prevention test** -- write a test that catches the CLASS of error, not just this instance (see "Which test to write" below)
 5. **Search for siblings** -- grep the codebase for the same pattern in other files
 6. **Revalidate existing data** -- if the fix changes ANY logic that determines how data is classified, filtered, displayed, or acted upon, re-run the fixed logic on all existing data
@@ -56,13 +56,13 @@ calculation, ask:
 
 At session end or before context compaction, update:
 
-- `BUG_PATTERNS_PDF.md` -- if any bugs were fixed
+- `BUG_PATTERNS_DOC.md` -- if any bugs were fixed
 - `FGT_LOG.md` -- if any significant changes were made
 - `BACKLOG.md` -- if any new items were identified
 
 At session start:
 - Read `BACKLOG.md` to understand what's outstanding
-- Read `BUG_PATTERNS_PDF.md` before acting
+- Read `BUG_PATTERNS_DOC.md` before acting
 - Run tests to verify current state
 
 ## Domain Expert Perspectives
@@ -81,13 +81,13 @@ When reviewing changes, consider:
 | File | Purpose |
 |------|---------|
 | `FGT.md` | Core methodology (symlink to canonical) |
-| `FGT_DOMAIN_PDF.md` | PDF-specific domain knowledge |
-| `PATTERNS_PDF.md` | Code patterns for this project |
-| `REVIEWS_PDF.md` | Review checklists |
-| `BUG_PATTERNS_PDF.md` | Bug catalog with prevention principles |
+| `FGT_DOMAIN_DOC.md` | PDF-specific domain knowledge |
+| `PATTERNS_DOC.md` | Code patterns for this project |
+| `REVIEWS_DOC.md` | Review checklists |
+| `BUG_PATTERNS_DOC.md` | Bug catalog with prevention principles |
 | `BACKLOG.md` | Outstanding work items (Principle 9) |
 | `FGT_LOG.md` | Development history and lessons |
-| `CLAUDE_WEB_PDF.md` | For Claude web project uploads |
+| `CLAUDE_WEB_DOC.md` | For Claude web project uploads |
 
 ## Prevention Principles (quick index -- definitions in FGT.md)
 
@@ -99,7 +99,7 @@ When reviewing changes, consider:
 6. **Verify Before Trust** -- trusted stale data without re-checking
 7. **Proactive Detection** -- bug class that could have been caught by structural scan
 8. **Defenses Must Be Operational** -- validation/filter/gate operating on null/empty = no defense
-9. **Findings Must Be Tracked** -- review findings not in BACKLOG.md/BUG_PATTERNS_PDF.md don't exist
+9. **Findings Must Be Tracked** -- review findings not in BACKLOG.md/BUG_PATTERNS_DOC.md don't exist
 10. **Scaffold Before Building** -- module boundaries, config, tests, and domain FGT files before first feature
 
 ## Quick Reference
@@ -107,7 +107,7 @@ When reviewing changes, consider:
 Bug Response:
 1. FIX         -> Resolve the specific problem
 2. ABSTRACT    -> Which principle was violated? What CLASS of bug?
-3. DOCUMENT    -> Add BUG-XXX to BUG_PATTERNS_PDF.md
+3. DOCUMENT    -> Add BUG-XXX to BUG_PATTERNS_DOC.md
 4. PREVENT     -> Add test that catches the CLASS
 5. SEARCH      -> Grep for siblings in CODE
 6. REVALIDATE  -> Check if existing DATA is contaminated

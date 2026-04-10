@@ -1,4 +1,4 @@
-"""Adaptive OCR learning system for pdf2txt."""
+"""Adaptive OCR learning system for doc2txt."""
 
 import math
 import random
@@ -6,8 +6,8 @@ import re
 import time
 from pathlib import Path
 
-from pdf2txt_models import ImageFeature
-from pdf2txt_quality import _quality_scorer
+from doc2txt_models import ImageFeature
+from doc2txt_quality import _quality_scorer
 
 
 class AdaptiveLearner:
@@ -19,7 +19,7 @@ class AdaptiveLearner:
     - Adaptive exploration rate (high early, decreases as confidence grows)
     """
 
-    DEFAULT_DB_PATH = Path.home() / ".pdf2txt" / "learning.db"
+    DEFAULT_DB_PATH = Path.home() / ".doc2txt" / "learning.db"
     MIN_SAMPLES_FOR_PREDICTION = 30  # Need enough data to train classifier
     MIN_EXPLORATION_RATE = 0.05  # Always explore at least 5%
     MAX_EXPLORATION_RATE = 0.50  # Start at 50% exploration

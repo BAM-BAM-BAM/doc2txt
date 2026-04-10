@@ -1,14 +1,14 @@
-"""Retro HUD display for pdf2txt processing."""
+"""Retro HUD display for doc2txt processing."""
 
 from __future__ import annotations
 
 import curses
 from typing import TYPE_CHECKING
 
-from pdf2txt_models import ProcessingStats, __version__
+from doc2txt_models import ProcessingStats, __version__
 
 if TYPE_CHECKING:
-    from pdf2txt_learning import AdaptiveLearner
+    from doc2txt_learning import AdaptiveLearner
 
 
 class RetroHUD:

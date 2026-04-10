@@ -1,7 +1,7 @@
 """Folder watcher for automatic document processing.
 
 Monitors directories for new/modified documents and processes them
-using the existing pdf2txt pipeline. Designed for low-cost background
+using the existing doc2txt pipeline. Designed for low-cost background
 operation with cross-filesystem support (WSL2 + Windows drives).
 
 Key design decisions:
@@ -21,9 +21,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pdf2txt_models import SUPPORTED_EXTENSIONS
+from doc2txt_models import SUPPORTED_EXTENSIONS
 
-logger = logging.getLogger("pdf2txt.watcher")
+logger = logging.getLogger("doc2txt.watcher")
 
 
 @dataclass
@@ -34,7 +34,7 @@ class WatchConfig:
     cooldown_minutes: int = 10
     formats: set[str] = field(default_factory=lambda: set(SUPPORTED_EXTENSIONS))
     recursive: bool = True
-    db_path: Path = field(default_factory=lambda: Path.home() / ".pdf2txt" / "watcher.db")
+    db_path: Path = field(default_factory=lambda: Path.home() / ".doc2txt" / "watcher.db")
     min_file_size: int = 100  # Skip files smaller than this (likely placeholders)
     overwrite: bool = False
     dry_run: bool = False
@@ -331,7 +331,7 @@ class FolderWatcher:
 
     def process_ready_files(self, scan_results: list[tuple[Path, str]]) -> dict:
         """Process all ready files from a scan. Returns summary stats."""
-        from pdf2txt import process_document
+        from doc2txt import process_document
 
         ready = [(p, r) for p, r in scan_results if r == "ready"]
         skipped = [(p, r) for p, r in scan_results if r != "ready"]

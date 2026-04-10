@@ -1,1 +1,1 @@
-# Tests for pdf2txt
+# Tests for doc2txt

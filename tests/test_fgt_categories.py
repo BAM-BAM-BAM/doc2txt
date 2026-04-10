@@ -1,4 +1,4 @@
-"""FGT-category tests for pdf2txt.
+"""FGT-category tests for doc2txt.
 
 New tests organized by FGT test categories:
   INV-*  : Domain invariants that must always hold
@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pdf2txt import (
+from doc2txt import (
     SUPPORTED_EXTENSIONS,
     ImageFeature,
     TextQualityScorer,
@@ -207,7 +207,7 @@ class TestProactive:
     def test_pro_001_module_size_enforcement(self):
         """No source file should exceed the module size limit.
 
-        Current state: pdf2txt.py is a 3,496-line monolith (limit: 3,600).
+        Current state: doc2txt.py is a 3,496-line monolith (limit: 3,600).
         After modularization, tighten to 500 lines per module.
         """
         project_root = Path(__file__).parent.parent
@@ -231,7 +231,7 @@ class TestProactive:
         Detects hardcoded format checks that bypass the central registry.
         """
         project_root = Path(__file__).parent.parent
-        source = (project_root / "pdf2txt.py").read_text()
+        source = (project_root / "doc2txt.py").read_text()
 
         # Find all lines with hardcoded extension checks outside the registry
         violations = []
