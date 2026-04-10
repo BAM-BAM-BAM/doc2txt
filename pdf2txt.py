@@ -1248,7 +1248,6 @@ class RetroHUD:
         s = self.stats
         elapsed = s.elapsed()
         mb_processed = s.processed_bytes / (1024 * 1024)
-        mb_total = s.total_bytes / (1024 * 1024)
         md_mb = s.md_bytes / (1024 * 1024)
         ratio = (s.md_bytes / s.processed_bytes * 100) if s.processed_bytes > 0 else 0
         files_per_min = (s.processed_files / elapsed * 60) if elapsed > 0 else 0
@@ -1582,7 +1581,7 @@ def check_tesseract_available() -> bool:
 def check_paddleocr_available() -> bool:
     """Check if PaddleOCR is available."""
     try:
-        import paddleocr
+        import paddleocr  # noqa: F401
         return True
     except ImportError:
         return False
@@ -1593,7 +1592,7 @@ def check_surya_available() -> bool:
     try:
         # Suppress Surya's "Checking connectivity" message during import
         with SuppressOutputFD(suppress=True):
-            import surya
+            import surya  # noqa: F401
         return True
     except ImportError:
         return False
@@ -1738,7 +1737,7 @@ def print_gpu_debug_info():
                     if 'display_active' in dev:
                         display_status = dev['display_active']
                         if display_status.lower() == 'enabled':
-                            print(f"    Display: Active (using VRAM for framebuffer)")
+                            print("    Display: Active (using VRAM for framebuffer)")
                         else:
                             print(f"    Display: {display_status}")
                     if 'gpu_util' in dev:
@@ -1779,7 +1778,6 @@ def clear_gpu_memory():
         )
         if result.returncode == 0:
             import os
-            import signal
             current_pid = os.getpid()
             for line in result.stdout.strip().split('\n'):
                 if line.strip():
@@ -2999,7 +2997,7 @@ def run_simple_parallel(documents: list[Path], args, use_ocr: bool, ocr_engine: 
             ratio = (stats.md_bytes / stats.processed_bytes * 100) if stats.processed_bytes > 0 else 0
 
             print()
-            print(f"Stats:")
+            print("Stats:")
             print(f"  Time elapsed:    {elapsed:.1f}s")
             print(f"  Workers used:    {max_workers}")
             print(f"  Input:           {total_mb:.2f} MB ({stats.processed_pages} pages)")
@@ -3272,7 +3270,7 @@ def run_simple(
             ratio = (stats.md_bytes / stats.processed_bytes * 100) if stats.processed_bytes > 0 else 0
 
             print()
-            print(f"Stats:")
+            print("Stats:")
             print(f"  Time elapsed:    {elapsed:.1f}s")
             print(f"  Input:           {total_mb:.2f} MB ({stats.processed_pages} pages)")
             print(f"  MD output:       {md_mb:.2f} MB ({ratio:.1f}% of input)")
@@ -3284,7 +3282,7 @@ def run_simple(
             ls = learner._stats
             if ls["images_seen"] > 0:
                 print()
-                print(f"Learning:")
+                print("Learning:")
                 print(f"  Images seen:     {ls['images_seen']:,}")
                 print(f"  Images OCR'd:    {ls['images_ocrd']:,} ({ls['ocr_useful']} useful, {ls['ocr_empty']} empty)")
                 print(f"  Images skipped:  {ls['images_skipped']:,}")
@@ -3375,8 +3373,8 @@ def print_learning_stats(stats: dict) -> None:
         print(f"    Skip validation: {sv_total} tested, {sv_useful} useful ({sv_error:.0%} error rate)")
         # Warn about corpus mismatch when error rate is very high
         if sv_error > 0.30:
-            print(f"    ⚠️  HIGH MISS RATE: Classifier may be trained on different document types")
-            print(f"       Consider: ./pdf2txt.py --learn-reset to retrain on this corpus")
+            print("    ⚠️  HIGH MISS RATE: Classifier may be trained on different document types")
+            print("       Consider: ./pdf2txt.py --learn-reset to retrain on this corpus")
     print()
 
     # Classifier section
@@ -3509,7 +3507,7 @@ def main() -> int:
         "--learn-db",
         type=str,
         metavar="PATH",
-        help=f"Custom path for learning database (default: ~/.pdf2txt/learning.db)"
+        help="Custom path for learning database (default: ~/.pdf2txt/learning.db)"
     )
     parser.add_argument(
         "--learn-stats",

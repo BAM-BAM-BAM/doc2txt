@@ -1,8 +1,7 @@
 """Tests for multi-format document support (DOCX, DOC, RTF, ODT)."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -16,9 +15,6 @@ from pdf2txt import (
     extract_text,
     create_markdown,
     _heading_level,
-    _table_to_markdown,
-    _paragraph_has_page_break,
-    check_libreoffice_available,
     process_document,
 )
 

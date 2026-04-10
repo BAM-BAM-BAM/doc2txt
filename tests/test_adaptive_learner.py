@@ -4,7 +4,6 @@ import random
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,7 +16,6 @@ from pdf2txt import (
     ImageFeature,
     TextQualityScorer,
     find_pdfs,
-    QualityMetrics,
 )
 
 
