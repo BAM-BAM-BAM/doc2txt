@@ -7,7 +7,7 @@
 | 2026-01-27 | PDF-003 | OCR detection heuristic (page_needs_ocr) | Heuristic failed on embedded fonts after 7 iterations. Eventually removed. Heuristic complexity spiral (CP-005). |
 | 2026-01-27 | PDF-004 | Adaptive ML learning system for OCR decisions | 12 commits of ML evolution (LogisticRegression -> DecisionTree, feature vectors, Thompson sampling). Over-engineered -- start simple. |
 | 2026-01-28 | PDF-005 | Feature vector dimension change (12 to 14) | Broke classifier DB records. Schema changes need migration plans. Stale data after logic fix (CP-001). |
-| 2026-01-28 | PDF-006 | GPU VRAM management (--force-ocr, --cpu) | Added resource guards and CPU fallback. Defenses must exist, not just be operational (Principle 8). |
+| 2026-01-28 | PDF-006 | GPU VRAM management (--force-ocr, --cpu) | Added resource guards and CPU fallback. Defenses must exist, not just be operational (Principle 9). |
 | 2026-04-09 | PDF-007 | FGT files added retroactively (commit 23/24) | Cargo-culted from VE project. PATTERNS/REVIEWS contained wrong-domain content. FGT_LOG empty. Apply methodology from day 1 (CP-006). |
 | 2026-04-09 | DOC-001 | Add DOCX/DOC/RTF/ODT support | Thin dispatch at two chokepoints keeps ~95% of code untouched. Format-agnostic pipeline design pays off. |
 
@@ -58,7 +58,7 @@
 
 **Lessons**:
 - Schema changes need migration plans before implementation
-- Stored data must be validated against current schema (Principle 6: Verify Before Trust)
+- Stored data must be validated against current schema (Principle 7: Verify Before Trust)
 - This is CP-001 (Stale Data After Logic Fix) -- fix the code AND the data
 
 ### 2026-01-28: GPU VRAM management (PDF-006)
@@ -68,7 +68,7 @@
 **Lessons**:
 - Resource-dependent operations need guards (check availability before loading)
 - WSL may hold zombie GPU processes after crashes -- requires full WSL restart
-- A defense that doesn't exist is worse than a hollow defense (Principle 8 extension)
+- A defense that doesn't exist is worse than a hollow defense (Principle 9 extension)
 
 ### 2026-04-09: FGT retrofit and cargo-cult detection (PDF-007)
 
@@ -78,7 +78,7 @@
 - Cargo-culting FGT files provides false confidence -- the wrong-domain content is never consulted
 - FGT_LOG remained empty for all 24 commits, meaning the self-improvement loop never activated
 - Retroactive methodology adoption is significantly less effective than proactive adoption
-- This experience led to Principle 10 (Scaffold Before Building) and the cargo-cult warning in CLAUDE_MD_TEMPLATE
+- This experience led to Principle 11 (Scaffold Before Building) and the cargo-cult warning in CLAUDE_MD_TEMPLATE
 
 ### 2026-04-09: Multi-format document support (DOC-001)
 

@@ -26,7 +26,15 @@ jobs:
         with:
           node-version: '20'
       - name: Clone FGT config
-        run: git clone --depth 1 https://github.com/BAM-BAM-BAM/fgt-config /tmp/fgt
+        # Pin fgt-config to a specific commit SHA. Unpinned HEAD-clone lets a
+        # compromise of BAM-BAM-BAM/fgt-config execute arbitrary Node code in
+        # this CI job with access to job secrets. Bump FGT_SHA when
+        # intentionally adopting new validator behavior.
+        env:
+          FGT_SHA: 7bde7272b6c36fe9d9628cb6bd03c942955c38fb
+        run: |
+          git clone https://github.com/BAM-BAM-BAM/fgt-config /tmp/fgt
+          git -C /tmp/fgt checkout "$FGT_SHA"
       - name: Validate FGT structure
         run: node /tmp/fgt/scripts/validate-fgt.mjs --project .
       - name: Check for cargo-culted content

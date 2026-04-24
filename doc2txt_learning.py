@@ -1,13 +1,68 @@
 """Adaptive OCR learning system for doc2txt."""
 
+import hmac
 import math
+import os
 import random
 import re
+import secrets
 import time
+from hashlib import sha256
 from pathlib import Path
 
 from doc2txt_models import ImageFeature
 from doc2txt_quality import _quality_scorer
+
+
+# Classifier blobs stored in SQLite go through pickle.loads, which executes
+# arbitrary code on a tampered blob. To defend against DB-tampering attackers
+# (shared hosts, backup-restore, DB exfil+substitute) we HMAC-sign every blob
+# with a 32-byte key stored at 0600 in a separate file under $HOME so the key
+# is not co-located with the DB that signs it.
+_HMAC_KEY_PATH = Path.home() / ".doc2txt" / "classifier_hmac.key"
+_HMAC_PREFIX = b"dtxt1\x00"  # format tag so future versions can be distinguished
+_SIG_LEN = 32  # sha256 digest size
+
+
+def _load_hmac_key() -> bytes:
+    """Return the HMAC key, creating it on first use. 0600, $HOME-scoped."""
+    if _HMAC_KEY_PATH.exists():
+        return _HMAC_KEY_PATH.read_bytes()
+    _HMAC_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_bytes(32)
+    # Write with 0600 atomically: write to temp then rename
+    tmp = _HMAC_KEY_PATH.with_suffix(".key.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    os.replace(tmp, _HMAC_KEY_PATH)
+    try:
+        _HMAC_KEY_PATH.chmod(0o600)
+    except OSError:
+        pass
+    return key
+
+
+def _sign_pickle(blob: bytes) -> bytes:
+    """Wrap a pickle blob as: _HMAC_PREFIX || sig || blob."""
+    sig = hmac.new(_load_hmac_key(), blob, sha256).digest()
+    return _HMAC_PREFIX + sig + blob
+
+
+def _verify_and_strip(wrapped: bytes) -> bytes | None:
+    """Verify HMAC and return the inner pickle blob, or None on mismatch."""
+    if not wrapped.startswith(_HMAC_PREFIX):
+        return None
+    body = wrapped[len(_HMAC_PREFIX):]
+    if len(body) < _SIG_LEN:
+        return None
+    sig, blob = body[:_SIG_LEN], body[_SIG_LEN:]
+    expected = hmac.new(_load_hmac_key(), blob, sha256).digest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return blob
 
 
 class AdaptiveLearner:
@@ -81,6 +136,12 @@ class AdaptiveLearner:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # DB contains HMAC-signed classifier pickles; enforce 0600 to keep
+        # them from being read/tampered by other local users.
+        try:
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            pass
 
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS ocr_outcomes (
@@ -173,7 +234,7 @@ class AdaptiveLearner:
         )
         self._total_samples = cursor.fetchone()["count"]
 
-        # Try to load saved classifier
+        # Try to load saved classifier (HMAC-verified before unpickle).
         import pickle
         import base64
         cursor = self._conn.execute(
@@ -182,13 +243,20 @@ class AdaptiveLearner:
         row = cursor.fetchone()
         if row:
             try:
-                self._classifier = pickle.loads(base64.b64decode(row["value"]))
-                cursor = self._conn.execute(
-                    "SELECT value FROM learning_meta WHERE key = 'last_train_count'"
-                )
-                row = cursor.fetchone()
-                if row:
-                    self._last_train_count = int(row["value"])
+                wrapped = base64.b64decode(row["value"])
+                blob = _verify_and_strip(wrapped)
+                if blob is None:
+                    # Signature missing, malformed, or mismatched — treat as
+                    # untrusted and retrain from raw samples.
+                    self._classifier = None
+                else:
+                    self._classifier = pickle.loads(blob)
+                    cursor = self._conn.execute(
+                        "SELECT value FROM learning_meta WHERE key = 'last_train_count'"
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        self._last_train_count = int(row["value"])
             except Exception:
                 self._classifier = None
 
@@ -301,7 +369,9 @@ class AdaptiveLearner:
 
         import pickle
         import base64
-        classifier_data = base64.b64encode(pickle.dumps(self._classifier)).decode('ascii')
+        classifier_data = base64.b64encode(
+            _sign_pickle(pickle.dumps(self._classifier))
+        ).decode('ascii')
         self._conn.execute(
             "INSERT OR REPLACE INTO learning_meta (key, value) VALUES (?, ?)",
             ("classifier", classifier_data)

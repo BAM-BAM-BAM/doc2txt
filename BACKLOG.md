@@ -3,7 +3,7 @@
 Items from expert reviews, user feedback, and identified improvements.
 Every item must be tracked here until resolved.
 
-**FGT Principle 9: Findings Must Be Tracked.**
+**FGT Principle 10: Findings Must Be Tracked.**
 If it's not in this file, it doesn't exist.
 
 ## Open

@@ -85,22 +85,23 @@ When reviewing changes, consider:
 | `PATTERNS_DOC.md` | Code patterns for this project |
 | `REVIEWS_DOC.md` | Review checklists |
 | `BUG_PATTERNS_DOC.md` | Bug catalog with prevention principles |
-| `BACKLOG.md` | Outstanding work items (Principle 9) |
+| `BACKLOG.md` | Outstanding work items (Principle 10) |
 | `FGT_LOG.md` | Development history and lessons |
 | `CLAUDE_WEB_DOC.md` | For Claude web project uploads |
 
 ## Prevention Principles (quick index -- definitions in FGT.md)
 
-1. **Explicit Contracts** -- untested module dependencies
-2. **Single Source of Truth** -- duplicated definitions that drifted
-3. **Existence Implies Usage** -- dead code or unused parameters
-4. **Invariants Must Be Tested** -- rule that should have been a test
-5. **Structure Implies Content** -- empty/hollow output fields
-6. **Verify Before Trust** -- trusted stale data without re-checking
-7. **Proactive Detection** -- bug class that could have been caught by structural scan
-8. **Defenses Must Be Operational** -- validation/filter/gate operating on null/empty = no defense
-9. **Findings Must Be Tracked** -- review findings not in BACKLOG.md/BUG_PATTERNS_DOC.md don't exist
-10. **Scaffold Before Building** -- module boundaries, config, tests, and domain FGT files before first feature
+1. **Every Addition Must Justify Its Keep** -- every new test, gate, hook, or doc must name ≥2 observed instances, its ongoing cost, and its sunsetting condition (meta-principle)
+2. **Explicit Contracts** -- untested module dependencies
+3. **Single Source of Truth** -- duplicated definitions that drifted
+4. **Existence Implies Usage** -- dead code or unused parameters
+5. **Invariants Must Be Tested** -- rule that should have been a test
+6. **Structure Implies Content** -- empty/hollow output fields
+7. **Verify Before Trust** -- trusted stale data without re-checking
+8. **Proactive Detection** -- bug class that could have been caught by structural scan
+9. **Defenses Must Be Operational** -- validation/filter/gate operating on null/empty = no defense
+10. **Findings Must Be Tracked** -- review findings not in BACKLOG.md/BUG_PATTERNS_DOC.md don't exist
+11. **Scaffold Before Building** -- module boundaries, config, tests, and domain FGT files before first feature
 
 ## Quick Reference
 ```
