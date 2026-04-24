@@ -94,7 +94,7 @@ When reviewing changes, consider:
 1. **Every Addition Must Justify Its Keep** -- every new test, gate, hook, or doc must name ≥2 observed instances, its ongoing cost, and its sunsetting condition (meta-principle)
 2. **Explicit Contracts** -- untested module dependencies
 3. **Single Source of Truth** -- duplicated definitions that drifted
-4. **Existence Implies Usage** -- dead code or unused parameters
+4. **Existence Implies Usage** -- dead code, unused parameters, or dead persisted data (columns/fields written with zero read sites)
 5. **Invariants Must Be Tested** -- rule that should have been a test
 6. **Structure Implies Content** -- empty/hollow output fields
 7. **Verify Before Trust** -- trusted stale data without re-checking
