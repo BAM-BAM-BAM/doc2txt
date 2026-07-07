@@ -1,0 +1,45 @@
+#!/bin/bash
+# Pre-commit hook (TypeScript): lint + type check + tests.
+set -e
+
+if [ ! -d "node_modules" ]; then
+    echo "[FGT] Pre-commit: node_modules not found, skipping."
+    echo "      Run 'npm install' to enable pre-commit verification."
+    exit 0
+fi
+
+echo "=== Pre-commit: lint ==="
+npx eslint src/ tests/
+
+echo "=== Pre-commit: type check ==="
+npx tsc --noEmit
+
+echo "=== Pre-commit: tests ==="
+npx vitest run --reporter=verbose
+
+# --- FGT Bug Abstraction Protocol enforcement ---
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+CRITICAL_STAGED=$(echo "$STAGED" | grep -E '^src/.*\.ts$' || true)
+
+if [ -n "$CRITICAL_STAGED" ]; then
+    if [ "${FGT_SKIP:-}" = "1" ]; then
+        echo "[FGT] Bypassed via FGT_SKIP=1"
+    else
+        DOCS_STAGED=$(echo "$STAGED" | grep -E '^(BUG_PATTERNS_{{DOMAIN}}|BACKLOG)\.md$' || true)
+        if [ -z "$DOCS_STAGED" ]; then
+            echo "[FGT] Pre-commit REJECTED:" >&2
+            echo "  Commit touches src/ without updating BUG_PATTERNS_{{DOMAIN}}.md or BACKLOG.md." >&2
+            echo "  Bypass: FGT_SKIP=1 git commit -m \"chore: ...\"" >&2
+            exit 1
+        fi
+        TESTS_STAGED=$(echo "$STAGED" | grep -E '^tests/.*\.ts$' || true)
+        if [ -z "$TESTS_STAGED" ]; then
+            echo "[FGT] Pre-commit REJECTED:" >&2
+            echo "  Commit touches src/ without modifying any test file." >&2
+            echo "  Bypass: FGT_SKIP=1 git commit -m \"chore: ...\"" >&2
+            exit 1
+        fi
+    fi
+fi
+
+echo "=== Pre-commit: all checks passed ==="

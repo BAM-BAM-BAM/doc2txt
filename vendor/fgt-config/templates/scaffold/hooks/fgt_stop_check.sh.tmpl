@@ -1,0 +1,81 @@
+#!/bin/bash
+# FGT Stop hook — blocks the assistant's response (exit 2) if N+ commits
+# have been made without updating tracking files.
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MEMORY_DIR="{{MEMORY_DIR}}"
+SESSION_MARKER="$MEMORY_DIR/.session_start"
+BUG_PATTERNS_PATH="$PROJECT_DIR/BUG_PATTERNS_{{DOMAIN}}.md"
+BACKLOG_PATH="$PROJECT_DIR/BACKLOG.md"
+COMMIT_THRESHOLD=3
+CRITICAL_DIRS="src"
+
+[ -f "$SESSION_MARKER" ] || exit 0
+
+SESSION_START=$(cat "$SESSION_MARKER")
+COMMIT_COUNT=$(git -C "$PROJECT_DIR" log --oneline --since="$SESSION_START" 2>/dev/null | wc -l)
+COMMIT_COUNT=${COMMIT_COUNT:-0}
+
+SESSION_EPOCH=$(date -d "$SESSION_START" +%s 2>/dev/null) || exit 0
+
+is_updated_since_session() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    local file_epoch
+    file_epoch=$(stat -c '%Y' "$f" 2>/dev/null) || return 1
+    [ "$file_epoch" -gt "$SESSION_EPOCH" ]
+}
+
+TRACKING_UPDATED=false
+for f in "$BUG_PATTERNS_PATH" "$BACKLOG_PATH"; do
+    if is_updated_since_session "$f"; then
+        TRACKING_UPDATED=true
+        break
+    fi
+done
+if [ "$TRACKING_UPDATED" = false ] && [ -d "$MEMORY_DIR" ]; then
+    for f in "$MEMORY_DIR"/*.md; do
+        is_updated_since_session "$f" && TRACKING_UPDATED=true && break
+    done
+fi
+
+if [ "$COMMIT_COUNT" -ge "$COMMIT_THRESHOLD" ] && [ "$TRACKING_UPDATED" = false ]; then
+    echo "FGT ENFORCEMENT: $COMMIT_COUNT commits without updating tracking files." >&2
+    echo "Update BUG_PATTERNS_{{DOMAIN}}.md, BACKLOG.md, or memory files." >&2
+    exit 2
+fi
+
+if [ "$COMMIT_COUNT" -gt 0 ] && [ "$TRACKING_UPDATED" = false ]; then
+    for dir in $CRITICAL_DIRS; do
+        if git -C "$PROJECT_DIR" log --since="$SESSION_START" --name-only --pretty=format: 2>/dev/null \
+            | grep -q "^$dir/"; then
+            echo "FGT ENFORCEMENT: commit touched '$dir/' without updating tracking files." >&2
+            exit 2
+        fi
+    done
+fi
+
+if [ "$COMMIT_COUNT" -gt 0 ]; then
+    TEST_CHANGED=$(git -C "$PROJECT_DIR" log --since="$SESSION_START" --name-only --pretty=format: 2>/dev/null \
+        | grep -c "^tests/" || true)
+    if [ "${TEST_CHANGED:-0}" -gt 0 ] && ! is_updated_since_session "$BUG_PATTERNS_PATH"; then
+        echo "FGT ABSTRACTION: test files modified but BUG_PATTERNS_{{DOMAIN}}.md NOT updated." >&2
+        exit 2
+    fi
+fi
+
+# --- CHECK 4: scope alignment (SPEC.md vs implementation) ---
+# If SPEC.md exists and src/ was changed this session but SPEC.md wasn't,
+# warn about potential specification drift.
+if [ -f "$PROJECT_DIR/SPEC.md" ] && [ "$COMMIT_COUNT" -gt 0 ]; then
+    SRC_CHANGED=$(git -C "$PROJECT_DIR" log --since="$SESSION_START" --name-only --pretty=format: 2>/dev/null \
+        | grep -c "^src/" || true)
+    if [ "${SRC_CHANGED:-0}" -gt 0 ] && ! is_updated_since_session "$PROJECT_DIR/SPEC.md"; then
+        echo "FGT SCOPE CHECK: src/ files changed but SPEC.md not updated this session." >&2
+        echo "Verify SPEC.md still matches implementation. Update or confirm no drift." >&2
+        exit 2
+    fi
+fi
+
+exit 0

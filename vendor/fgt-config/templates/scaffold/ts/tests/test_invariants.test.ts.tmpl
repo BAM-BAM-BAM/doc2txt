@@ -1,0 +1,12 @@
+// INV-* Invariant tests — domain rules that must always hold.
+// See FGT_DOMAIN_{{DOMAIN}}.md § Invariants for the full list.
+
+import { describe, it, expect } from 'vitest';
+import { AppConfigSchema, DEFAULT_CONFIG } from '../src/config.js';
+
+describe('INV-CONFIG-001: Default config passes runtime validation', () => {
+  it('DEFAULT_CONFIG satisfies the Zod schema', () => {
+    const result = AppConfigSchema.safeParse(DEFAULT_CONFIG);
+    expect(result.success).toBe(true);
+  });
+});

@@ -1,0 +1,19 @@
+// Typed configuration — single source of truth for app settings.
+// Runtime-validated via Zod schemas (FGT Day 1 requirement).
+// See CONFIG_{{DOMAIN}}.md and FGT Principle 2 (Single Source of Truth).
+
+import { z } from 'zod';
+
+export const AppConfigSchema = z.object({
+  // Add project-specific config fields here
+});
+
+export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+export const DEFAULT_CONFIG: AppConfig = {
+  // Add default values here
+};
+
+export function loadConfig(raw: unknown): AppConfig {
+  return AppConfigSchema.parse(raw);
+}

@@ -1,0 +1,39 @@
+#!/bin/bash
+# Install version-controlled git hooks into .git/hooks/.
+# Run once after cloning: bash scripts/install-hooks.sh
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HOOK_SRC_DIR="$PROJECT_DIR/scripts/git-hooks"
+HOOK_DEST_DIR="$PROJECT_DIR/.git/hooks"
+
+if [ ! -d "$HOOK_DEST_DIR" ]; then
+    echo "ERROR: $HOOK_DEST_DIR does not exist — is this a git checkout?" >&2
+    exit 1
+fi
+
+installed=0
+for hook in "$HOOK_SRC_DIR"/*; do
+    [ -f "$hook" ] || continue
+    name=$(basename "$hook")
+    dest="$HOOK_DEST_DIR/$name"
+
+    if [ -f "$dest" ] && [ ! -L "$dest" ]; then
+        cp "$dest" "$dest.backup.$(date +%Y%m%d%H%M%S)"
+        echo "Backed up existing $name"
+    fi
+
+    ln -sf "$hook" "$dest"
+    chmod +x "$hook"
+    echo "Installed: $name -> $hook"
+    installed=$((installed + 1))
+done
+
+if [ $installed -eq 0 ]; then
+    echo "No hooks found in $HOOK_SRC_DIR"
+    exit 1
+fi
+
+echo ""
+echo "Installed $installed hook(s). Test with:"
+echo "  bash .git/hooks/pre-commit"

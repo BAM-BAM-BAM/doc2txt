@@ -1,0 +1,23 @@
+#!/bin/bash
+# FGT SessionStart hook — records session start time and surfaces any
+# pre-compaction snapshot left by a prior session.
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MEMORY_DIR="{{MEMORY_DIR}}"
+SESSION_MARKER="$MEMORY_DIR/.session_start"
+STAGING_FILE="$MEMORY_DIR/session_staging.md"
+
+mkdir -p "$MEMORY_DIR"
+
+date -Iseconds > "$SESSION_MARKER"
+
+if [ -f "$STAGING_FILE" ]; then
+    echo "RECOVERED CONTEXT from pre-compaction snapshot:"
+    echo ""
+    cat "$STAGING_FILE"
+    rm -f "$STAGING_FILE"
+fi
+
+echo "SESSION START — FGT Protocol Active (project: {{PROJECT_LOWER}})"
+echo "Read BACKLOG.md and BUG_PATTERNS_{{DOMAIN}}.md before acting."

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Local CI — runs the full verification pipeline locally.
+set -e
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
+
+echo "=== {{PROJECT_LOWER}} local CI ==="
+echo ""
+
+echo "--- Step 1: Lint ---"
+{{LINT_CMD}} || { echo "[FAIL] Lint failed" >&2; exit 1; }
+echo "[PASS] Lint"
+echo ""
+
+echo "--- Step 2: Type check ---"
+{{BUILD_CMD}} || { echo "[FAIL] Type check failed" >&2; exit 1; }
+echo "[PASS] Type check"
+echo ""
+
+echo "--- Step 3: Tests ---"
+{{TEST_CMD}} || { echo "[FAIL] Tests failed" >&2; exit 1; }
+echo "[PASS] Tests"
+echo ""
+
+echo "--- Step 4: FGT structure validation ---"
+if command -v node &>/dev/null && [ -f "$HOME/.claude/fgt/scripts/validate-fgt.mjs" ]; then
+    node "$HOME/.claude/fgt/scripts/validate-fgt.mjs" --project "$PROJECT_DIR" || {
+        echo "[FAIL] FGT validation failed" >&2; exit 1;
+    }
+    echo "[PASS] FGT validation"
+else
+    echo "[SKIP] FGT validation (node or validate-fgt.mjs not available)"
+fi
+echo ""
+
+echo "=== All checks passed ==="

@@ -1,0 +1,13 @@
+# INV-* Invariant tests — domain rules that must always hold.
+# See FGT_DOMAIN_{{DOMAIN}}.md § Invariants for the full list.
+
+import pytest
+
+
+class TestConfigInvariant:
+    """INV-CONFIG-001: Config values have correct types."""
+
+    def test_config_loads_successfully(self):
+        """Default config must pass Pydantic validation."""
+        # Add config import and validation once config module exists
+        assert True  # placeholder

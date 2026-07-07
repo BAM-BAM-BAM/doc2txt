@@ -1,0 +1,14 @@
+# PRO-* Proactive detection tests — structural scans that catch bug classes
+# before they manifest. See FGT.md § Principle 7.
+
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent.parent
+
+
+class TestPrivacyProactive:
+    """PRO-PRIVACY-001: .gitignore excludes sensitive paths."""
+
+    def test_gitignore_excludes_env(self):
+        gitignore = (PROJECT_ROOT / ".gitignore").read_text()
+        assert ".env" in gitignore

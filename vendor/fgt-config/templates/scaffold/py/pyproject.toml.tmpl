@@ -1,0 +1,29 @@
+[project]
+name = "{{PROJECT_LOWER}}"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "invariant: INV-* domain rules that must always hold",
+    "proactive: PRO-* structural scans for bug classes",
+    "contract: CONTRACT-* cross-module dependency tests",
+    "integration: INT-* end-to-end workflow tests",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
