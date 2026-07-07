@@ -14,6 +14,12 @@ If it's not in this file, it doesn't exist.
 ### Documentation
 - [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
 
+### FGT/OCD standards review (2026-07-07)
+- [ ] Commit the watcher CLI entrypoint (doc2txt_watcher.py `main()`/argparse, dirty since 2026-05-13) -- nightly 02:00 cron runs this uncommitted code; a checkout/clone silently breaks production
+- [ ] Run Bug Abstraction Protocol on watcher crashes: 20 of 44 nightly runs died on uncaught OSError (unmounted /mnt/g x18, OneDrive I/O error x2); one bad path aborts the entire scan -- add BUG-XXX entry + per-path error handling + BOUND-* test
+- [ ] Add tests for the watcher CLI (`main`/`_build_arg_parser` have zero coverage) -- source: pre-commit verification protocol in CLAUDE.md
+- [ ] Add sweep.sh check for recent tracebacks in watcher.log -- crash class observed 20x, meets Principle 1 bar; SWEEP arrays currently empty
+
 ## Resolved
 
 ### Architecture (2026-04-10)

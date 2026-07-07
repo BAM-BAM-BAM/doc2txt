@@ -429,3 +429,85 @@ class FolderWatcher:
 
     def close(self):
         self.tracker.close()
+
+
+def _build_arg_parser():
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="doc2txt-watcher",
+        description="Poll directories for new/modified documents and convert them via doc2txt.",
+    )
+    p.add_argument(
+        "--watch-dir", "-d", action="append", required=True, type=Path,
+        help="Directory to watch (repeat for multiple).",
+    )
+    p.add_argument("--poll-interval", type=int, default=30, help="Minutes between scans (default: 30).")
+    p.add_argument("--cooldown", type=int, default=10, help="Minutes since last mtime before processing (default: 10).")
+    p.add_argument(
+        "--formats", default=",".join(sorted(SUPPORTED_EXTENSIONS)),
+        help=f"Comma-separated extensions to watch (default: all supported = {','.join(sorted(SUPPORTED_EXTENSIONS))}).",
+    )
+    p.add_argument("--no-recursive", action="store_true", help="Do not descend into subdirectories.")
+    p.add_argument("--db-path", type=Path, default=Path.home() / ".doc2txt" / "watcher.db",
+                   help="SQLite tracker path (default: ~/.doc2txt/watcher.db).")
+    p.add_argument("--overwrite", action="store_true", help="Overwrite existing .md outputs.")
+    p.add_argument("--dry-run", action="store_true", help="Scan only; do not convert.")
+    p.add_argument("--no-ocr", action="store_true", help="Disable OCR fallback.")
+    p.add_argument("--ocr-engine", default="auto", help="OCR engine: auto|surya|paddle (default: auto).")
+    p.add_argument("--force-ocr", action="store_true", help="OCR every page regardless of text detection.")
+    p.add_argument("--once", action="store_true",
+                   help="Run a single scan cycle and exit (for cron/systemd-timer scheduling).")
+    p.add_argument("--verbose", "-v", action="store_true", help="DEBUG-level logging.")
+    return p
+
+
+def main(argv=None):
+    args = _build_arg_parser().parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    formats = {f if f.startswith(".") else f".{f}" for f in args.formats.split(",") if f.strip()}
+    unknown = formats - set(SUPPORTED_EXTENSIONS)
+    if unknown:
+        raise SystemExit(f"Unsupported format(s): {sorted(unknown)}. Allowed: {sorted(SUPPORTED_EXTENSIONS)}")
+
+    config = WatchConfig(
+        watch_dirs=args.watch_dir,
+        poll_interval_minutes=args.poll_interval,
+        cooldown_minutes=args.cooldown,
+        formats=formats,
+        recursive=not args.no_recursive,
+        db_path=args.db_path,
+        overwrite=args.overwrite,
+        dry_run=args.dry_run,
+        use_ocr=not args.no_ocr,
+        ocr_engine=args.ocr_engine,
+        force_ocr=args.force_ocr,
+        verbose=args.verbose,
+    )
+
+    config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    watcher = FolderWatcher(config)
+    try:
+        if args.once:
+            scan_results = watcher.scan_once()
+            ready = sum(1 for _, r in scan_results if r == "ready")
+            pending = sum(1 for _, r in scan_results if r != "ready")
+            logger.info("Single scan: %d files (%d ready, %d pending)",
+                        len(scan_results), ready, pending)
+            if ready:
+                stats = watcher.process_ready_files(scan_results)
+                logger.info("Done: %d processed, %d skipped, %d failed",
+                            stats["processed"], stats["skipped"], stats["failed"])
+        else:
+            watcher.run()
+    finally:
+        watcher.close()
+
+
+if __name__ == "__main__":
+    main()
