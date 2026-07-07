@@ -97,3 +97,14 @@
 **Lessons**:
 - The existing pipeline was already ~95% format-agnostic -- only `find_pdfs()` and `extract_text_from_pdf()` were truly PDF-specific
 - Adding format support at the extraction layer means all downstream features (parallel, HUD, quality scoring, improve mode) work automatically
+
+### 2026-07-07: Watcher crash class fixed via Bug Abstraction Protocol (DOC-002)
+
+**Change**: Per-path OSError containment in `FolderWatcher.scan_once()` — an unreachable watch dir (unmounted /mnt/g, ENODEV) or an I/O-erroring file (OneDrive, EIO) now logs a warning and is skipped instead of aborting the entire nightly scan. BUG-004 documented; 3 BOUND tests + 11 CLI tests added (test_watcher.py, 32 total); two watcher.log health checks added to scripts/sweep.sh (recent tracebacks within 7 days, last-run freshness <=72h).
+
+**Evidence**: 20 of 44 nightly cron runs (May-June 2026) died with uncaught OSError tracebacks in watcher.log — unnoticed for weeks because nothing watched the log.
+
+**Lessons**:
+- Existence checks are not exception guards: on dead mounts and cloud-sync paths, `Path.exists()`/`is_file()`/`stat()` raise OSError instead of returning False (Principle 9 — the exists() guard itself crashed on the exact filesystems the watcher targets)
+- Unattended loops need error containment sized to the smallest skippable unit of work (one path, not one run)
+- Silent cron death is its own bug class: absence of output looks like success; a sweep freshness check is the enforcement plane

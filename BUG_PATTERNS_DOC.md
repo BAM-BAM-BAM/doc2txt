@@ -57,3 +57,22 @@ both old and new formats. This is CP-001 (Stale Data After Logic Fix).
 **Pattern:** Resource-dependent operations without guards. The defense (GPU memory
 management) didn't exist — it wasn't hollow, it was absent. Any pipeline using
 GPU resources must check availability before loading and have a CPU fallback path.
+
+---
+
+### BUG-004: Uncaught OSError on dead mount aborts entire watcher scan
+
+| Field | Value |
+|-------|-------|
+| **Symptom** | 20 of 44 nightly cron runs (May–June 2026) died with a traceback: `OSError: [Errno 19] No such device: '/mnt/g/Shared drives'` (18x, Google Drive not mounted) and `OSError: [Errno 5] Input/output error` (2x, OneDrive paths). One unreachable path aborted the whole scan — the reachable watch dirs were never processed that night. |
+| **Root Cause** | `scan_once()` guarded missing dirs with `if not watch_dir.exists()`, assuming `exists()` returns False for anything unreachable. On dead mounts (ENODEV) and stalled cloud-sync paths (EIO), `os.stat()` raises instead of returning — the guard itself crashed. Same for `path.is_file()` on individual files mid-scan. |
+| **Fix** | Per-path error containment in `scan_once()`: OSError on a watch dir logs a warning and continues with remaining dirs; OSError while listing or on an individual file skips that entry. Blast radius of one bad path = one skipped path, not the run. |
+| **Principle Violated** | #9 (Defenses Must Be Operational) — the exists() guard was the defense against bad watch dirs, but it only covered the ENOENT case; on ENODEV/EIO the defense itself raised, so it defended against nothing on the exact filesystems (WSL2 /mnt/ drive mounts, cloud sync) the watcher was built for. |
+| **Prevention Test** | test_watcher.py: `test_bound_unreachable_watch_dir_skipped` (ENODEV on one dir; scan still returns other dirs' files) and `test_bound_io_error_on_one_file_skips_file` (EIO on one file mid-scan; remaining files still scanned). Simulated via monkeypatched `Path.exists`/`Path.stat` on tmp_path fixtures — no real mounts. |
+| **Siblings** | `find_pdfs()` / `find_documents()` in doc2txt.py walk with unguarded rglob — left as-is deliberately: interactive CLI on a single user-named directory, where a loud immediate failure is the right behavior. The class matters for unattended multi-dir loops where partial progress beats aborting. |
+| **Data Revalidation** | N/A — scan-time behavior only; no stored classifications changed. Files missed by crashed runs were picked up by later successful runs (tracker is mtime/size-based). |
+
+**Pattern:** Existence checks are not exception guards. On removable/network/cloud
+filesystems, `exists()`, `is_file()`, and `stat()` raise OSError rather than
+returning False. Any long-running or unattended loop over such paths needs
+per-item OSError containment sized to the smallest unit of work it can skip.

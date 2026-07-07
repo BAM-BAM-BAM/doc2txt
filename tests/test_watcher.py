@@ -19,6 +19,8 @@ from doc2txt_watcher import (
     ProcessedTracker,
     FolderWatcher,
     WatchConfig,
+    _build_arg_parser,
+    main,
 )
 
 
@@ -260,6 +262,102 @@ class TestFolderWatcher:
         ready = [p.name for p, r in results if r == "ready"]
         assert "nested.pdf" in ready
 
+    def test_bound_unreachable_watch_dir_skipped(self, tmp_path, monkeypatch):
+        """BUG-004: OSError on one watch dir (dead mount) must not abort the scan.
+
+        Simulates an unmounted drive where exists() raises ENODEV instead of
+        returning False. The other watch dir must still be scanned.
+        """
+        good_dir = tmp_path / "good"
+        good_dir.mkdir()
+        self._make_old_file(good_dir / "reachable.pdf")
+        dead_mount = tmp_path / "dead_mount"
+
+        real_exists = Path.exists
+
+        def fake_exists(self, **kwargs):
+            if self == dead_mount:
+                raise OSError(19, "No such device", str(self))
+            return real_exists(self, **kwargs)
+
+        monkeypatch.setattr(Path, "exists", fake_exists)
+
+        config = WatchConfig(
+            watch_dirs=[dead_mount, good_dir],
+            cooldown_minutes=0,
+            min_file_size=10,
+            db_path=tmp_path / "watcher.db",
+        )
+        watcher = FolderWatcher(config)
+        results = watcher.scan_once()
+        watcher.close()
+
+        ready = [p.name for p, r in results if r == "ready"]
+        assert "reachable.pdf" in ready
+
+    def test_bound_io_error_on_one_file_skips_file(self, tmp_path, monkeypatch):
+        """BUG-004: OSError on one file mid-scan must skip that file only.
+
+        Simulates a cloud-sync file where stat() raises EIO. The remaining
+        files in the same dir must still be scanned.
+        """
+        self._make_old_file(tmp_path / "healthy.pdf")
+        bad_file = tmp_path / "stalled_sync.pdf"
+        self._make_old_file(bad_file)
+
+        real_stat = Path.stat
+
+        def fake_stat(self, **kwargs):
+            if self == bad_file:
+                raise OSError(5, "Input/output error", str(self))
+            return real_stat(self, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+
+        config = WatchConfig(
+            watch_dirs=[tmp_path],
+            cooldown_minutes=0,
+            min_file_size=10,
+            db_path=tmp_path / "watcher.db",
+        )
+        watcher = FolderWatcher(config)
+        results = watcher.scan_once()
+        watcher.close()
+
+        names = [p.name for p, _ in results]
+        assert "healthy.pdf" in names
+        assert "stalled_sync.pdf" not in names
+
+    def test_bound_unlistable_watch_dir_skipped(self, tmp_path, monkeypatch):
+        """BUG-004: OSError while listing one watch dir skips that dir only."""
+        good_dir = tmp_path / "good"
+        good_dir.mkdir()
+        self._make_old_file(good_dir / "reachable.pdf")
+        bad_dir = tmp_path / "bad"
+        bad_dir.mkdir()
+
+        real_rglob = Path.rglob
+
+        def fake_rglob(self, pattern):
+            if self == bad_dir:
+                raise OSError(5, "Input/output error", str(self))
+            return real_rglob(self, pattern)
+
+        monkeypatch.setattr(Path, "rglob", fake_rglob)
+
+        config = WatchConfig(
+            watch_dirs=[bad_dir, good_dir],
+            cooldown_minutes=0,
+            min_file_size=10,
+            db_path=tmp_path / "watcher.db",
+        )
+        watcher = FolderWatcher(config)
+        results = watcher.scan_once()
+        watcher.close()
+
+        ready = [p.name for p, r in results if r == "ready"]
+        assert "reachable.pdf" in ready
+
     def test_int_scan_nonexistent_dir(self, tmp_path):
         """scan_once handles non-existent watch directory gracefully."""
         config = WatchConfig(
@@ -296,3 +394,108 @@ class TestFolderWatcher:
         md_path = tmp_path / "watched.md"
         assert md_path.exists()
         assert "Watched content" in md_path.read_text()
+
+
+class TestCli:
+    """Tests for the CLI entrypoint (_build_arg_parser / main)."""
+
+    def test_schema_once_flag(self):
+        args = _build_arg_parser().parse_args(["--watch-dir", "/tmp/a", "--once"])
+        assert args.once is True
+
+    def test_schema_once_defaults_false(self):
+        args = _build_arg_parser().parse_args(["--watch-dir", "/tmp/a"])
+        assert args.once is False
+
+    def test_schema_multiple_watch_dirs_accumulate(self):
+        args = _build_arg_parser().parse_args(
+            ["--watch-dir", "/tmp/a", "-d", "/tmp/b"]
+        )
+        assert args.watch_dir == [Path("/tmp/a"), Path("/tmp/b")]
+
+    def test_schema_watch_dir_required(self, capsys):
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--once"])
+
+    def test_schema_cooldown_parsed_as_int(self):
+        args = _build_arg_parser().parse_args(
+            ["--watch-dir", "/tmp/a", "--cooldown", "45"]
+        )
+        assert args.cooldown == 45
+
+    def test_schema_defaults(self):
+        args = _build_arg_parser().parse_args(["--watch-dir", "/tmp/a"])
+        assert args.cooldown == 10
+        assert args.poll_interval == 30
+        assert args.dry_run is False
+        assert args.verbose is False
+
+    def test_bound_unsupported_format_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="Unsupported format"):
+            main(["--watch-dir", str(tmp_path), "--formats", "exe",
+                  "--db-path", str(tmp_path / "w.db"), "--once"])
+
+    def _capture_watcher(self, monkeypatch, scan_results):
+        """Stub FolderWatcher's scan/run/process methods, recording calls."""
+        calls = {"scan": 0, "run": 0, "process": 0, "config": None}
+
+        real_init = FolderWatcher.__init__
+
+        def fake_init(self, config):
+            real_init(self, config)
+            calls["config"] = config
+
+        def fake_scan(self):
+            calls["scan"] += 1
+            return scan_results
+
+        def fake_run(self):
+            calls["run"] += 1
+
+        def fake_process(self, results):
+            calls["process"] += 1
+            return {"processed": len(results), "skipped": 0, "failed": 0}
+
+        monkeypatch.setattr(FolderWatcher, "__init__", fake_init)
+        monkeypatch.setattr(FolderWatcher, "scan_once", fake_scan)
+        monkeypatch.setattr(FolderWatcher, "run", fake_run)
+        monkeypatch.setattr(FolderWatcher, "process_ready_files", fake_process)
+        return calls
+
+    def test_int_main_once_dispatches_single_scan(self, tmp_path, monkeypatch):
+        """--once runs exactly one scan and never enters the watch loop."""
+        calls = self._capture_watcher(monkeypatch, scan_results=[])
+        main(["--watch-dir", str(tmp_path), "--once",
+              "--db-path", str(tmp_path / "w.db")])
+        assert calls["scan"] == 1
+        assert calls["run"] == 0
+        assert calls["process"] == 0  # no ready files -> no processing
+
+    def test_int_main_once_processes_ready_files(self, tmp_path, monkeypatch):
+        """--once with ready scan results dispatches to process_ready_files."""
+        ready = [(tmp_path / "a.pdf", "ready")]
+        calls = self._capture_watcher(monkeypatch, scan_results=ready)
+        main(["--watch-dir", str(tmp_path), "--once",
+              "--db-path", str(tmp_path / "w.db")])
+        assert calls["scan"] == 1
+        assert calls["process"] == 1
+
+    def test_int_main_without_once_enters_watch_loop(self, tmp_path, monkeypatch):
+        """Without --once, main dispatches to the polling loop."""
+        calls = self._capture_watcher(monkeypatch, scan_results=[])
+        main(["--watch-dir", str(tmp_path),
+              "--db-path", str(tmp_path / "w.db")])
+        assert calls["run"] == 1
+        assert calls["scan"] == 0
+
+    def test_int_main_builds_config_from_args(self, tmp_path, monkeypatch):
+        """CLI args land in the WatchConfig the watcher is constructed with."""
+        calls = self._capture_watcher(monkeypatch, scan_results=[])
+        main(["--watch-dir", str(tmp_path), "--once", "--cooldown", "7",
+              "--formats", "pdf,docx", "--dry-run",
+              "--db-path", str(tmp_path / "w.db")])
+        config = calls["config"]
+        assert config.watch_dirs == [tmp_path]
+        assert config.cooldown_minutes == 7
+        assert config.formats == {".pdf", ".docx"}
+        assert config.dry_run is True

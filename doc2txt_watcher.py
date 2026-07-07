@@ -307,24 +307,40 @@ class FolderWatcher:
         results = []
 
         for watch_dir in self.config.watch_dirs:
-            if not watch_dir.exists():
-                logger.warning("Watch directory does not exist: %s", watch_dir)
+            # exists() itself raises OSError on dead mounts (ENODEV on an
+            # unmounted /mnt/g, EIO on a stalled OneDrive path) — it does not
+            # return False. One unreachable dir must not abort the whole scan.
+            try:
+                if not watch_dir.exists():
+                    logger.warning("Watch directory does not exist: %s", watch_dir)
+                    continue
+            except OSError as e:
+                logger.warning("Watch directory unreachable, skipping: %s (%s)", watch_dir, e)
                 continue
 
             # Find all supported documents
             pattern_func = watch_dir.rglob if self.config.recursive else watch_dir.glob
-            for path in sorted(pattern_func("*")):
-                if not path.is_file():
-                    continue
-                if path.suffix.lower() not in self.config.formats:
-                    continue
+            try:
+                paths = sorted(pattern_func("*"))
+            except OSError as e:
+                logger.warning("Cannot list watch directory, skipping: %s (%s)", watch_dir, e)
+                continue
+            for path in paths:
+                try:
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() not in self.config.formats:
+                        continue
 
-                # Skip if already processed and unchanged
-                if not self.tracker.needs_processing(path):
-                    continue
+                    # Skip if already processed and unchanged
+                    if not self.tracker.needs_processing(path):
+                        continue
 
-                # Check readiness
-                ready, reason = self.checker.is_ready(path)
+                    # Check readiness
+                    ready, reason = self.checker.is_ready(path)
+                except OSError as e:
+                    logger.warning("Skipping unreadable path: %s (%s)", path, e)
+                    continue
                 results.append((path, reason))
 
         return results
