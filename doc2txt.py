@@ -1971,8 +1971,8 @@ def main() -> int:
         version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
-        "directory",
-        help="Directory to search for documents (supports Windows paths in WSL)"
+        "path",
+        help="Document file, or directory to search for documents (supports Windows paths in WSL)"
     )
 
     verbosity = parser.add_mutually_exclusive_group()
@@ -2155,18 +2155,25 @@ def main() -> int:
         return 0
 
     # Convert and validate path
-    directory = convert_windows_path(args.directory)
+    path = convert_windows_path(args.path)
 
-    if not directory.exists():
-        print(f"Error: Directory does not exist: {directory}", file=sys.stderr)
+    if not path.exists():
+        print(f"Error: Path does not exist: {path}", file=sys.stderr)
         return 1
 
-    if not directory.is_dir():
-        print(f"Error: Path is not a directory: {directory}", file=sys.stderr)
+    single_file = path.is_file()
+    if single_file and path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        print(f"Error: Unsupported file type: {path.suffix or '(none)'}", file=sys.stderr)
+        print(f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
         return 1
+
+    directory = path.parent if single_file else path
 
     # Watch mode
     if args.watch:
+        if single_file:
+            print("Error: --watch requires a directory, not a file", file=sys.stderr)
+            return 1
         import logging
         from doc2txt_watcher import WatchConfig, FolderWatcher
 
@@ -2258,13 +2265,16 @@ def main() -> int:
     if args.learn_shuffle:
         should_shuffle = True  # Explicit --learn-shuffle overrides
 
-    documents = find_documents(
-        directory,
-        recursive=args.recursive,
-        quiet=args.quiet,
-        shuffle=should_shuffle,
-        formats=formats,
-    )
+    if single_file:
+        documents = [path]
+    else:
+        documents = find_documents(
+            directory,
+            recursive=args.recursive,
+            quiet=args.quiet,
+            shuffle=should_shuffle,
+            formats=formats,
+        )
 
     if not documents:
         return 0

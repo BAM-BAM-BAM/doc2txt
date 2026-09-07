@@ -43,6 +43,9 @@ pip install surya-ocr
 # Basic usage - process all PDFs in a directory
 ./doc2txt.py /path/to/pdfs
 
+# Process a single file (output .md is written beside it)
+./doc2txt.py /path/to/file.pdf
+
 # Recursive search with verbose output
 ./doc2txt.py -r -v /path/to/pdfs
 
