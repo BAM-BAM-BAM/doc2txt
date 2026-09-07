@@ -170,6 +170,37 @@ class TestBoundary:
         with pytest.raises(ValueError, match="Unsupported format"):
             extract_text(path)
 
+    def test_bound_005_cli_single_file_processes_only_that_file(self, tmp_path, monkeypatch):
+        """A file path as the positional argument processes that file alone, not its siblings."""
+        import docx
+        from doc2txt import main
+
+        for name in ("target.docx", "sibling.docx"):
+            doc = docx.Document()
+            doc.add_paragraph("Hello from " + name)
+            doc.save(str(tmp_path / name))
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-j", "1", "--no-ocr", str(tmp_path / "target.docx")])
+        assert main() == 0
+        assert (tmp_path / "target.md").exists()
+        assert not (tmp_path / "sibling.md").exists()
+
+    def test_bound_006_cli_single_file_rejects_unsupported_and_watch(self, tmp_path, monkeypatch, capsys):
+        """A file path with an unsupported extension, or combined with --watch, exits 1 with a message."""
+        from doc2txt import main
+
+        bad = tmp_path / "notes.xyz"
+        bad.touch()
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", str(bad)])
+        assert main() == 1
+        assert "Unsupported file type" in capsys.readouterr().err
+
+        good = tmp_path / "a.docx"
+        good.touch()
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "--watch", str(good)])
+        assert main() == 1
+        assert "--watch requires a directory" in capsys.readouterr().err
+
     def test_bound_003_quality_scorer_handles_extremes(self):
         """Quality scorer handles extreme inputs without crash."""
         scorer = TextQualityScorer()
