@@ -15,7 +15,8 @@ ENV/
 *.swo
 
 # Claude
-.claude/
+.claude/*
+!.claude/settings.json
 
 # OS
 .DS_Store
