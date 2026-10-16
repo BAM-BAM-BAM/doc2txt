@@ -2271,7 +2271,7 @@ def main() -> int:
     directory = path.parent if single_file else path
 
     formats = None
-    if args.formats:
+    if args.formats is not None:
         try:
             formats = parse_formats(args.formats)
         except ValueError as e:

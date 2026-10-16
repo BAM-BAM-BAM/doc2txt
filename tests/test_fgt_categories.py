@@ -513,7 +513,7 @@ class TestBoundary:
         doc2txt_watcher.main([*watcher_cli, "--formats", "PDF, .Docx,"])
         assert batch + watch == [{".pdf", ".docx"}] * 3
 
-        for bad in ("exe", ","):
+        for bad in ("exe", ",", ""):
             for mode in ([], ["--watch"]):
                 monkeypatch.setattr(sys, "argv", ["doc2txt.py", *mode, "--no-ocr", "--formats", bad, str(tmp_path)])
                 assert doc2txt.main() == 1, (bad, mode)

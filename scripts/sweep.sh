@@ -34,8 +34,9 @@ SWEEP_DB=""
 #    like success). 72h, not 48h: the log shows benign 1-2 night gaps
 #    when the WSL host is off; 48h would WARN on routine host-off days.
 #
-# 3. watcher-dirs: WARN if a watch directory was logged missing or
-#    unreachable within 72h. Since BUG-004 a dead mount logs a WARNING
+# 3. watcher-dirs: WARN if the most recent scan logged a watch directory
+#    missing or unreachable (check 2 covers a log with no recent scan).
+#    Since BUG-004 a dead mount logs a WARNING
 #    and the run carries on, so the directory is silently not watched:
 #    /mnt/g was missing in 56 runs (2026-07..10, every October run)
 #    before anyone noticed, after 18 crashes for the same cause earlier.
@@ -72,17 +73,22 @@ if [ -f "$WATCHER_LOG" ]; then
         warn "watcher — no dated log lines found in watcher.log"
     fi
 
-    DIR_CUTOFF=$(date -d "-72 hours" '+%Y-%m-%d %H:%M:%S')
-    MISSING_DIRS=$(awk -v cutoff="$DIR_CUTOFF" '
-        /Watch directory (does not exist|unreachable)/ && substr($0, 1, 19) >= cutoff {
-            sub(/.*Watch directory (does not exist|unreachable, skipping): /, ""); sub(/ \(.*/, ""); dirs[$0] = 1
+    # A scan logs its missing dirs, then "Single scan:" (--once) or
+    # "Found N files" / "No new or modified files found" (polling loop).
+    MISSING_DIRS=$(awk '
+        /Watch directory (does not exist|unreachable, skipping): / {
+            d = $0
+            sub(/.*Watch directory (does not exist|unreachable, skipping): /, "", d)
+            if ($0 ~ /unreachable, skipping: /) sub(/ \(\[Errno.*$/, "", d)
+            pending = pending (pending == "" ? "" : "; ") d
         }
-        END { for (d in dirs) printf "%s ", d }
+        /Single scan: |Found [0-9]+ files: |No new or modified files found/ { last = pending; pending = "" }
+        END { print last }
     ' "$WATCHER_LOG")
     if [ -n "$MISSING_DIRS" ]; then
-        warn "watcher — watch dir(s) missing or unreachable within 72h: ${MISSING_DIRS% } (not scanned; mount it)"
+        warn "watcher — last scan could not reach watch dir(s): $MISSING_DIRS (not scanned; mount it)"
     else
-        pass "watcher — every watch dir reachable within 72h"
+        pass "watcher — last scan reached every watch dir"
     fi
 else
     warn "watcher — watcher.log not found (nightly cron output missing)"
