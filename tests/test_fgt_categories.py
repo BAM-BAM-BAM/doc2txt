@@ -25,6 +25,7 @@ from doc2txt import (
     create_markdown,
     find_documents,
     iter_documents,
+    progress_formatter,
 )
 
 
@@ -32,6 +33,14 @@ def _walk(root: Path, recursive: bool = True) -> tuple[list[Path], list[Path]]:
     skipped = []
     found = list(iter_documents(root, recursive, {".pdf"}, lambda p, e: skipped.append(p)))
     return sorted(found), skipped
+
+
+def _progress_render(monkeypatch, columns, status_width=16, folders=("a",)):
+    """progress_formatter over root/<folder>/x.pdf documents with a fixed terminal width."""
+    import doc2txt
+    monkeypatch.setattr(doc2txt, "_terminal_columns", lambda: columns)
+    root = Path("/root")
+    return root, progress_formatter([root / f / "x.pdf" for f in folders], root, status_width)
 
 
 def _fail_stat(monkeypatch, bad: Path, err: int, lstat_too: bool = False) -> None:
@@ -129,6 +138,35 @@ class TestInvariants:
         assert len(result) >= 1
 
 
+class TestProgressInvariants:
+    """INV-* tests for -v progress lines (status | folder | file)."""
+
+    LONG_FOLDER = "Clients/" + "/".join(["Acme Corp Holdings"] * 10) + "/2023"
+    LONG_NAME = ("Statement of account " * 7)[:146] + ".pdf"
+
+    def test_inv_006_progress_line_fits_terminal(self, monkeypatch):
+        """Every non-FAILED line fits columns-1 and starts its folder at status_width+2."""
+        assert len(self.LONG_FOLDER) > 200 and len(self.LONG_NAME) == 150
+        folders = ["a", "b/c", self.LONG_FOLDER]
+        for status_width in (16, 21, 26):
+            for columns in range(status_width + 25, 201, 7):
+                root, render = _progress_render(monkeypatch, columns, status_width, folders)
+                for folder in folders:
+                    for message in (f"Created: {self.LONG_NAME}", "Skipped (exists): x.pdf"):
+                        line = render(message, root / folder / "x.pdf")
+                        assert len(line) <= columns - 1, (status_width, columns, line)
+                        assert line[status_width:status_width + 2] == "  "
+                        assert line[status_width + 2] != " "
+
+    def test_inv_007_progress_narrow_or_unknown_untruncated(self, monkeypatch):
+        """No terminal, a 0-width report, or a too-narrow terminal prints the full folder and name."""
+        for status_width in (16, 26):
+            for columns in (None, 0, status_width + 24):
+                root, render = _progress_render(monkeypatch, columns, status_width, [self.LONG_FOLDER])
+                line = render(f"Created: {self.LONG_NAME}", root / self.LONG_FOLDER / "x.pdf")
+                assert line == f"{'Created':<{status_width}}  {self.LONG_FOLDER}  {self.LONG_NAME}"
+
+
 class TestOutputQuality:
     """QUAL-* tests: verify output values are correct, not just computed."""
 
@@ -170,6 +208,22 @@ class TestOutputQuality:
             f"Extracted text scored {metrics.total_score}, expected readable text"
         )
         assert metrics.word_count > 10
+
+
+    def test_qual_002_progress_columns(self, monkeypatch):
+        """Root files show '.', FAILED keeps its error, and ellipsis keeps both ends."""
+        root, render = _progress_render(monkeypatch, None, folders=[".", "a"])
+        assert render("Created: x.md", root / "x.pdf") == f"{'Created':<16}  .  x.md"
+
+        error = "Cannot open broken document: " + "x" * 200
+        root, render = _progress_render(monkeypatch, 80, folders=["a"])
+        assert render(f"FAILED: x.pdf - {error}", root / "a" / "x.pdf").endswith(error)
+
+        root, render = _progress_render(monkeypatch, 80, folders=["Taxes/2023/Federal/Supporting Documents/Scans"])
+        line = render("Created: " + "q" * 60 + ".md", root / "Taxes/2023/Federal/Supporting Documents/Scans" / "x.pdf")
+        folder_col, name_col = line[18:].split("  ", 1)
+        assert folder_col.startswith("Taxes/2023/F") and folder_col.endswith("Scans") and "…" in folder_col
+        assert name_col.rstrip().endswith(".md") and "…" in name_col
 
 
 class TestBoundary:
@@ -403,6 +457,26 @@ class TestIntegration:
         monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-j", "1", "--no-ocr", "-r", str(root_link)])
         assert main() == 0
         assert (other / "linked.md").exists()
+
+    def test_int_002_cli_verbose_shows_folders(self, tmp_path, monkeypatch, capsys):
+        """-v prints status | folder | file, sequential (with Processing lines) and parallel."""
+        import docx
+        from doc2txt import main
+
+        for jobs in ("1", "2"):
+            root = tmp_path / f"j{jobs}"
+            for rel in ("a/x.docx", "b/c/y.docx"):
+                (root / rel).parent.mkdir(parents=True)
+                doc = docx.Document()
+                doc.add_paragraph("Hello")
+                doc.save(str(root / rel))
+
+            monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-v", "-r", "--no-ocr", "-j", jobs, str(root)])
+            assert main() == 0
+            lines = set(capsys.readouterr().out.splitlines())
+            assert {f"{'Created':<16}  a  x.md", f"{'Created':<16}  b/c  y.md"} <= lines
+            processing = {f"{'Processing':<16}  a  x.docx", f"{'Processing':<16}  b/c  y.docx"}
+            assert (processing <= lines) == (jobs == "1")
 
 
 class TestProactive:

@@ -120,3 +120,13 @@
 - One walk per tree, not one per glob pattern: on drvfs the same 12,766-file discovery went from 362.5 s (15 rglob passes) to 57.4 s, including one stat per document
 - The BUG-004 decision to leave the CLI unguarded assumed a "loud failure"; the real outcome was a traceback. Check what the failure actually prints before accepting it as the error message
 
+### 2026-10-16: `-v` progress lines show status | folder | file columns
+
+**Change**: `progress_formatter()` renders each `-v` line as three columns: the status, the document's folder relative to the path argument, and the name from the message. On a terminal at least `status_width + 25` columns wide (41 by default), lines are fitted to the current width with a middle ellipsis; FAILED lines keep their full error. When stdout is not a terminal, nothing is truncated. The status column is as wide as the longest label the run can print (16 by default, 21 with `--improve`, 26 when learning). `run_simple` keeps its `Processing` pre-line in the same columns. 4 new tests (127 total).
+
+**Evidence**: On the 2,562-document vault run, `-v` printed only `Created: x.md`, so there was no way to see which folder the run had reached. In a real pty (`script` + `stty cols`) at 80 and 188 columns, no non-FAILED line exceeded `columns - 1`, and every folder started at column 18.
+
+**Lessons**:
+- `shutil.get_terminal_size()` prefers `$COLUMNS` and queries `sys.__stdout__`; `os.get_terminal_size(sys.stdout.fileno())` reads the live width of the actual stdout and raises when it is not a terminal
+- `script -qec "stty cols N; …" /dev/null` gives a real terminal for checking width-dependent output from a non-interactive shell
+

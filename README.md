@@ -77,7 +77,7 @@ pip install surya-ocr
 | Option | Description |
 |--------|-------------|
 | `-r, --recursive` | Search subdirectories for PDFs |
-| `-v, --verbose` | Show detailed progress |
+| `-v, --verbose` | Per-document progress: status, folder, file |
 | `-q, --quiet` | Suppress all output except errors |
 | `--hud` | Show retro 80's style HUD |
 | `-j N, --jobs N` | Number of parallel workers (default: CPU count) |
