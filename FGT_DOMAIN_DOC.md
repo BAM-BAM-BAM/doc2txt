@@ -54,6 +54,9 @@ It supplements the generic FGT methodology defined in [FGT.md](FGT.md).
 | Feature vector dimensions | 14 | `ImageFeature.to_vector()` definition |
 | Quality score whitespace threshold | 95% | `is_mostly_white` (>95% pixels above 240) |
 | Brightness contrast threshold | std > 30 | `has_contrast` field in ImageFeature |
+| `OFFICE_OWNER_PREFIX` | `"~$"` | Office owner (lock) file names; `iter_documents()` skips them |
+| Watcher minimum file size | 100 bytes | `WatchConfig` default; smaller files are treated as cloud placeholders (no CLI flag) |
+| Watcher cooldown | 10 minutes since last mtime | `WatchConfig` default; `--cooldown` |
 
 ---
 
@@ -101,7 +104,7 @@ storage format. Validate at ingestion. Convert only at display.
 - Extract table content as markdown tables
 
 ### Non-DOCX Legacy Formats (.doc, .rtf, .odt)
-- Require LibreOffice for conversion
+- Require LibreOffice Writer (`lowriter`) for conversion; a Calc-only install converts nothing
 - Convert to DOCX first, then extract
 - LibreOffice not safely concurrent -- be cautious with parallelism
 
@@ -123,6 +126,11 @@ storage format. Validate at ingestion. Convert only at display.
 | LibreOffice lock | DOC/RTF/ODT | Concurrent conversion fails | Limit parallelism for these formats |
 | GPU VRAM exhaustion | PDF (OCR) | Process killed or hangs during OCR | Check VRAM before loading models; provide CPU fallback |
 | Feature vector mismatch | PDF (ML) | Classifier crashes on dimension mismatch | Maintain backward compat or trigger migration when vector dims change |
+| Unmounted drive raises (BUG-004) | All | `exists()` on an unmounted `/mnt` drive raises ENODEV instead of returning False | Wrap `exists()`/`is_file()` in OSError containment per watch dir and per file |
+| Unreadable link (BUG-005) | All | A Windows junction such as the OneDrive Personal Vault: `lstat` works, `stat` and `readlink` raise EIO | Discovery follows links, walks each directory once, and reports unreadable entries instead of dropping them |
+| Calc-only LibreOffice (BUG-007) | DOC/RTF/ODT | `libreoffice` exits 0 and writes nothing for a Writer document | Check for `lowriter`; treat "no output" as a failure |
+| Failure stored as done (BUG-007) | All | A failed conversion is marked processed, so the watcher never retries it | Mark a document only when it was converted or deliberately skipped |
+| Office owner file (BUG-009) | DOCX/DOC | `~$name.docx` (about 162 bytes) has the document's extension and is not a document | Skip `OFFICE_OWNER_PREFIX` names in discovery |
 
 ---
 

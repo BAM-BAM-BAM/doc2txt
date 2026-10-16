@@ -93,3 +93,15 @@ if [ -f "$WATCHER_LOG" ]; then
 else
     warn "watcher — watcher.log not found (nightly cron output missing)"
 fi
+
+# --- lang-app stop hook ---
+# WARN while lang-app's checked-out stop hook pipes git log into `grep -q`
+# (under pipefail, SIGPIPE turns a match into no match). Delete once it PASSes.
+LANG_APP_HOOK="$HOME/projects/lang-app/scripts/fgt_stop_check.sh"
+if [ -f "$LANG_APP_HOOK" ]; then
+    if grep -qE 'grep -[a-zA-Z]*q[a-zA-Z]* "\$1"' "$LANG_APP_HOOK"; then
+        warn "lang-app — stop hook still pipes git log into grep -q: merge lang-app #3, then pull lang-app main"
+    else
+        pass "lang-app — stop hook reads the whole git log stream"
+    fi
+fi

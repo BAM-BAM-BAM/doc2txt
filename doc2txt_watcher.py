@@ -45,18 +45,6 @@ class WatchConfig:
     verbose: bool = False
 
 
-# Temp file patterns from cloud sync tools
-CLOUD_SYNC_TEMP_PATTERNS = [
-    "*.gstmp",          # Google Drive temp
-    "*.tmp",            # Generic temp
-    "*.crdownload",     # Chrome download in progress
-    "*.part",           # Partial download
-    "desktop.ini",      # Windows folder metadata
-    "thumbs.db",        # Windows thumbnails
-    ".ds_store",        # macOS metadata
-]
-
-
 class FileReadinessChecker:
     """Determine if a file is ready for processing.
 
@@ -65,8 +53,7 @@ class FileReadinessChecker:
     2. Has a sibling editor lock file (open in an editor/office suite)
     3. Cannot acquire a shared file lock (another process has exclusive lock)
     4. Is smaller than min_file_size (likely a cloud placeholder)
-    5. Matches a known temp/sync file pattern
-    6. Size changed between two checks 1 second apart (actively being written)
+    5. Size changed between two checks 1 second apart (actively being written)
     """
 
     def __init__(self, cooldown_minutes: int = 10, min_file_size: int = 100):
@@ -83,12 +70,6 @@ class FileReadinessChecker:
 
         if not path.is_file():
             return False, "not a regular file"
-
-        # Check temp/sync file patterns
-        name_lower = path.name.lower()
-        for pattern in CLOUD_SYNC_TEMP_PATTERNS:
-            if self._matches_pattern(name_lower, pattern.lower()):
-                return False, f"matches temp pattern: {pattern}"
 
         # Check file size (placeholder detection)
         try:
@@ -122,12 +103,6 @@ class FileReadinessChecker:
             return False, size_reason
 
         return True, "ready"
-
-    def _matches_pattern(self, name: str, pattern: str) -> bool:
-        """Simple glob-style pattern matching."""
-        if pattern.startswith("*."):
-            return name.endswith(pattern[1:])
-        return name == pattern
 
     def _check_editor_locks(self, path: Path) -> str | None:
         """Check if sibling editor lock files exist."""

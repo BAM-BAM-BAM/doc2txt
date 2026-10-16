@@ -150,3 +150,14 @@
 **Lessons**:
 - A filter in one consumer of discovery (the watcher's readiness check) protects only that consumer; put "what is a document" in discovery itself
 
+
+### 2026-10-16: Backlog cleanup — dead temp-pattern check, stop-hook race upstream, domain lessons
+
+**Change**: The watcher's `CLOUD_SYNC_TEMP_PATTERNS` check, which discovery made unreachable, is deleted. The stop-hook `grep -qE` race is fixed in fgt-config's template and `examples/demo-py` (#57, merged, with a `test-new-project.sh` assertion) and in lang-app (#3, left to the owner to merge; a sweep check WARNs until it lands). FGT_DOMAIN_DOC.md gets the BUG-004, 005, 007 and 009 lessons, and Bug Abstraction step 7 now names it. 136 tests.
+
+**Evidence**: `scan_once` is the only production caller of `is_ready`, and it passes only `SUPPORTED_EXTENSIONS` files; none of the 7 patterns ends in one. The new fgt-config assertion fails on the old template (ts and py) and passes on the new one. Reviewing the split plan turned up an OCR defect, filed in BACKLOG: 932 watcher outputs from PDFs have empty bodies.
+
+**Lessons**:
+- A check placed after a filter that already excludes everything it matches is dead code, and its unit test (calling the check directly) keeps it looking alive
+- A grep assertion over a hook must be anchored on the dangerous call; the broad `| grep -…q` pattern also matched a harmless small-payload grep and could never pass
+- An open-ended "as discovered" backlog item closes by moving the instruction into the per-bug protocol that runs every time
