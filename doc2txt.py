@@ -137,11 +137,23 @@ def find_documents(
 
 
 def _ellipsize(text: str, width: int) -> str:
-    """Shorten text to width, keeping its first and last characters around '…'."""
+    """Shorten text to width, keeping its first and last characters around '...'.
+
+    ASCII on purpose: a stdout that cannot encode '…' would raise mid-run.
+    """
     if len(text) <= width:
         return text
-    head = (width - 1) // 2
-    return text[:head] + "…" + text[len(text) - (width - 1 - head):]
+    head = (width - 3) // 2
+    return text[:head] + "..." + text[len(text) - (width - 3 - head):]
+
+
+def _status_width(improve: bool, learning: bool) -> int:
+    """Width of the longest status label a run in this mode can print."""
+    if learning:
+        return len("Skipping (already learned)")
+    if improve:
+        return len("Kept (better quality)")
+    return len("Skipped (exists)")
 
 
 def _terminal_columns() -> int | None:
@@ -1564,8 +1576,7 @@ def run_simple_parallel(documents: list[Path], root: Path, args, use_ocr: bool, 
     stats.total_files = len(documents)
     stats.total_bytes = sum(p.stat().st_size for p in documents)
     improve_mode = getattr(args, 'improve', False)
-    status_width = len("Kept (better quality)") if improve_mode else len("Skipped (exists)")
-    render = progress_formatter(documents, root, status_width)
+    render = progress_formatter(documents, root, _status_width(improve_mode, learning=False))
 
     if args.verbose or args.dry_run:
         if args.dry_run:
@@ -1815,13 +1826,8 @@ def run_simple(
     stats.total_files = len(documents)
     stats.total_bytes = sum(p.stat().st_size for p in documents)
     improve_mode = getattr(args, 'improve', False)
-    if learner and learner.enabled:
-        status_width = len("Skipping (already learned)")
-    elif improve_mode:
-        status_width = len("Kept (better quality)")
-    else:
-        status_width = len("Skipped (exists)")
-    render = progress_formatter(documents, root, status_width)
+    learning = bool(learner and learner.enabled)
+    render = progress_formatter(documents, root, _status_width(improve_mode, learning))
 
     if args.verbose or args.dry_run:
         if args.dry_run:

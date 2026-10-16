@@ -122,7 +122,7 @@
 
 ### 2026-10-16: `-v` progress lines show status | folder | file columns
 
-**Change**: `progress_formatter()` renders each `-v` line as three columns: the status, the document's folder relative to the path argument, and the name from the message. On a terminal at least `status_width + 25` columns wide (41 by default), lines are fitted to the current width with a middle ellipsis; FAILED lines keep their full error. When stdout is not a terminal, nothing is truncated. The status column is as wide as the longest label the run can print (16 by default, 21 with `--improve`, 26 when learning). `run_simple` keeps its `Processing` pre-line in the same columns. 4 new tests (127 total).
+**Change**: `progress_formatter()` renders each `-v` line as three columns: the status, the document's folder relative to the path argument, and the name from the message. On a terminal at least `status_width + 25` columns wide (41 by default), lines are fitted to the current width with a middle `...` (ASCII, so a non-UTF-8 stdout cannot raise); FAILED lines keep their full error. When stdout is not a terminal, nothing is truncated. The status column is as wide as the longest label the run can print (16 by default, 21 with `--improve`, 26 when learning), from one `_status_width()` helper. `run_simple` keeps its `Processing` pre-line in the same columns. 5 new tests (128 total); the `--improve` and learn widths were checked by mutation.
 
 **Evidence**: On the 2,562-document vault run, `-v` printed only `Created: x.md`, so there was no way to see which folder the run had reached. In a real pty (`script` + `stty cols`) at 80 and 188 columns, no non-FAILED line exceeded `columns - 1`, and every folder started at column 18.
 

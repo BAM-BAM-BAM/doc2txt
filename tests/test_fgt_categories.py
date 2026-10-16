@@ -222,8 +222,30 @@ class TestOutputQuality:
         root, render = _progress_render(monkeypatch, 80, folders=["Taxes/2023/Federal/Supporting Documents/Scans"])
         line = render("Created: " + "q" * 60 + ".md", root / "Taxes/2023/Federal/Supporting Documents/Scans" / "x.pdf")
         folder_col, name_col = line[18:].split("  ", 1)
-        assert folder_col.startswith("Taxes/2023/F") and folder_col.endswith("Scans") and "…" in folder_col
-        assert name_col.rstrip().endswith(".md") and "…" in name_col
+        assert folder_col.startswith("Taxes/2023/F") and folder_col.endswith("Scans") and "..." in folder_col
+        assert name_col.rstrip().endswith(".md") and "..." in name_col
+        assert line.isascii()
+
+    def test_qual_003_learn_skip_line_uses_learn_status_width(self, tmp_path, capsys):
+        """Learning runs pad status to 26 and print the skip line as status | folder | name."""
+        from argparse import Namespace
+        from types import SimpleNamespace
+        from doc2txt import run_simple
+
+        import docx
+
+        learned, fresh = tmp_path / "a" / "x.pdf", tmp_path / "b" / "y.docx"
+        learned.parent.mkdir()
+        learned.touch()
+        fresh.parent.mkdir()
+        docx.Document().save(str(fresh))
+        learner = SimpleNamespace(enabled=True, is_file_processed=lambda p: p == learned, _stats={"images_seen": 0})
+        args = Namespace(verbose=True, quiet=False, dry_run=False, overwrite=False, improve=False, debug=False)
+
+        run_simple([learned, fresh], tmp_path, args, use_ocr=False, ocr_engine="paddle", force_ocr=False, learner=learner)
+        lines = capsys.readouterr().out.splitlines()
+        assert f"{'Skipping (already learned)':<26}  a  x.pdf" in lines
+        assert f"{'Processing':<26}  b  y.docx" in lines
 
 
 class TestBoundary:
@@ -477,6 +499,15 @@ class TestIntegration:
             assert {f"{'Created':<16}  a  x.md", f"{'Created':<16}  b/c  y.md"} <= lines
             processing = {f"{'Processing':<16}  a  x.docx", f"{'Processing':<16}  b/c  y.docx"}
             assert (processing <= lines) == (jobs == "1")
+
+            (root / "d").mkdir()
+            docx.Document().save(str(root / "d" / "z.docx"))
+            monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-v", "-r", "--no-ocr", "--improve", "-j", jobs, str(root)])
+            main()
+            improve_lines = [ln for ln in capsys.readouterr().out.splitlines()
+                             if ln.startswith(("Improved ", "Kept (better quality) ", "Created "))]
+            assert len(improve_lines) == 3
+            assert all(ln[21:23] == "  " and ln[23] != " " for ln in improve_lines)
 
 
 class TestProactive:
