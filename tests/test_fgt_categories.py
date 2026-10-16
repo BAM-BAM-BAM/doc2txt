@@ -678,8 +678,7 @@ class TestProactive:
         """BUG-006: results are classified by result_status(), never by a substring of the message.
 
         A substring test also matches the filename: "FAILED: Skipped items.pdf - ..."
-        counted as skipped in run_simple and run_with_hud. doc2txt_hud.py is exempt:
-        its "FAIL" in msg only colours a log line.
+        counted as skipped in run_simple and run_with_hud.
         """
         import re
 
@@ -687,7 +686,6 @@ class TestProactive:
         violations = [
             f"{f.name}:{i}: {line.strip()}"
             for f in sorted(project_root.glob("doc2txt*.py"))
-            if f.name != "doc2txt_hud.py"
             for i, line in enumerate(f.read_text().splitlines(), 1)
             if re.search(r"\bin message\b", line)
         ]
