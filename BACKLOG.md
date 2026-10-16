@@ -8,9 +8,6 @@ If it's not in this file, it doesn't exist.
 
 ## Open
 
-### Architecture
-- [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
-
 ### OCR
 - [ ] **Scanned PDFs convert to empty `.md` files and are recorded as processed.** Found 2026-10-16 while reviewing the split plan.
   - Tesseract on an image region: `ocr_image_region` passes `clip=` to `page.get_textpage_ocr`, which raises TypeError in pymupdf 1.27.2.3 (`.venv`, the cron interpreter) and 1.26.7 (system). Full-page Tesseract (`--force-ocr`) works.
@@ -26,6 +23,9 @@ If it's not in this file, it doesn't exist.
 - [ ] PRO-002 (`test_pro_002_no_hardcoded_extensions_outside_registry`) cannot fail: it only warns, on 3 lines today (`page_label`, `is_pdf`, `has_pdfs`, all `== '.pdf'`). Making it strict means deciding which per-format checks are allowed -- source: split plan review 2026-10-16
 
 ## Resolved
+
+### Architecture (2026-10-16)
+- [x] Further split doc2txt.py (2,447 lines) into extractors.py + ocr.py + cli.py -- `doc2txt_ocr.py` (845), `doc2txt_extractors.py` (636, with discovery and status labels so the watcher never imports the CLI), `doc2txt.py` stays the CLI (996); code moved unchanged (AST check), aliases `process_pdf`/`process_pdf_worker` deleted; PRO-001 limit 3,800 → 1,200; PRO-002 and PRO-004 scan every `doc2txt*.py`
 
 ### Backlog cleanup (2026-10-16)
 - [x] `FileReadinessChecker.is_ready`'s `CLOUD_SYNC_TEMP_PATTERNS` check could not match anything `scan_once` passes it -- deleted with `_matches_pattern` and `test_bound_temp_file_not_ready`; `test_int_scan_finds_ready_files` already asserts a non-document name is never scanned

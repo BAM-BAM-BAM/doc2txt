@@ -11,12 +11,10 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from doc2txt import (
-    AdaptiveLearner,
-    ImageFeature,
-    TextQualityScorer,
-    find_documents,
-)
+from doc2txt_extractors import find_documents
+from doc2txt_learning import AdaptiveLearner
+from doc2txt_models import ImageFeature
+from doc2txt_quality import TextQualityScorer
 
 
 class TestQualTextQualityScorer:
