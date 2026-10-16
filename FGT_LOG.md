@@ -108,3 +108,15 @@
 - Existence checks are not exception guards: on dead mounts and cloud-sync paths, `Path.exists()`/`is_file()`/`stat()` raise OSError instead of returning False (Principle 9 — the exists() guard itself crashed on the exact filesystems the watcher targets)
 - Unattended loops need error containment sized to the smallest skippable unit of work (one path, not one run)
 - Silent cron death is its own bug class: absence of output looks like success; a sweep freshness check is the enforcement plane
+
+### 2026-10-16: Discovery follows links; CLI exits cleanly on unreadable paths (BUG-005)
+
+**Change**: New `iter_documents()` walker in doc2txt.py replaces the three `rglob`/`glob` discovery sites (`find_documents`, `find_pdfs` — deleted, `FolderWatcher.scan_once`). It follows symlinked files and directories, walks each directory once by `(st_dev, st_ino)`, and reports unreadable links and directories instead of dropping them. `main()` prints one `Error: cannot read …` line instead of a traceback, and exits 1 when a directory argument cannot be listed. 12 new tests (123 total), one watcher test rewritten.
+
+**Evidence**: `doc2txt.py -r '/mnt/d/OneDrive/Personal Vault/'` crashed with EIO. The vault is a junction to a volume with no drive letter, which WSL cannot follow; processing it needs a separate drvfs mount.
+
+**Lessons**:
+- `Path.rglob` (3.12) never descends symlinked directories and swallows listing errors; a walker whose link and error behavior matters has to be written and tested, not inherited
+- One walk per tree, not one per glob pattern: on drvfs the same 12,766-file discovery went from 362.5 s (15 rglob passes) to 57.4 s, including one stat per document
+- The BUG-004 decision to leave the CLI unguarded assumed a "loud failure"; the real outcome was a traceback. Check what the failure actually prints before accepting it as the error message
+

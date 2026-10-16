@@ -15,7 +15,7 @@ from doc2txt import (
     AdaptiveLearner,
     ImageFeature,
     TextQualityScorer,
-    find_pdfs,
+    find_documents,
 )
 
 
@@ -324,15 +324,15 @@ class TestIntFindDocsShuffle:
                 (tmppath / f"file_{i:02d}.pdf").write_bytes(b'%PDF-1.4')
 
             # Find without shuffle (should be sorted)
-            pdfs_sorted = find_pdfs(tmppath, shuffle=False, quiet=True)
+            pdfs_sorted = find_documents(tmppath, shuffle=False, quiet=True, formats={".pdf"})
             pdfs_sorted = sorted(pdfs_sorted)  # Ensure sorted for comparison
 
             # Find with shuffle multiple times
             random.seed(42)
-            pdfs_shuffled1 = find_pdfs(tmppath, shuffle=True, quiet=True)
+            pdfs_shuffled1 = find_documents(tmppath, shuffle=True, quiet=True, formats={".pdf"})
 
             random.seed(123)
-            pdfs_shuffled2 = find_pdfs(tmppath, shuffle=True, quiet=True)
+            pdfs_shuffled2 = find_documents(tmppath, shuffle=True, quiet=True, formats={".pdf"})
 
             # Same files should be found
             assert set(pdfs_sorted) == set(pdfs_shuffled1) == set(pdfs_shuffled2)
@@ -347,14 +347,14 @@ class TestIntFindDocsShuffle:
             tmppath = Path(tmpdir)
             (tmppath / "only_file.pdf").write_bytes(b'%PDF-1.4')
 
-            pdfs = find_pdfs(tmppath, shuffle=True, quiet=True)
+            pdfs = find_documents(tmppath, shuffle=True, quiet=True, formats={".pdf"})
             assert len(pdfs) == 1
 
     def test_bound_shuffle_with_empty_directory(self):
         """Shuffle should work with empty directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
-            pdfs = find_pdfs(tmppath, shuffle=True, quiet=True)
+            pdfs = find_documents(tmppath, shuffle=True, quiet=True, formats={".pdf"})
             assert len(pdfs) == 0
 
 

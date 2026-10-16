@@ -11,6 +11,9 @@ If it's not in this file, it doesn't exist.
 ### Architecture
 - [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
+### CLI
+- [ ] `--watch --formats` (doc2txt.py watch-mode branch) builds extensions without `.strip().lower()`, unlike the batch path: `--formats PDF` matches nothing and `--formats "pdf, docx"` drops docx -- source: BUG-005 code review 2026-10-16
+
 ### Documentation
 - [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
 

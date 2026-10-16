@@ -328,22 +328,24 @@ class TestFolderWatcher:
         assert "healthy.pdf" in names
         assert "stalled_sync.pdf" not in names
 
-    def test_bound_unlistable_watch_dir_skipped(self, tmp_path, monkeypatch):
+    def test_bound_unlistable_watch_dir_skipped(self, tmp_path, monkeypatch, caplog):
         """BUG-004: OSError while listing one watch dir skips that dir only."""
+        import os
         good_dir = tmp_path / "good"
         good_dir.mkdir()
         self._make_old_file(good_dir / "reachable.pdf")
         bad_dir = tmp_path / "bad"
         bad_dir.mkdir()
+        self._make_old_file(bad_dir / "unlistable.pdf")
 
-        real_rglob = Path.rglob
+        real_scandir = os.scandir
 
-        def fake_rglob(self, pattern):
-            if self == bad_dir:
-                raise OSError(5, "Input/output error", str(self))
-            return real_rglob(self, pattern)
+        def fake_scandir(path="."):
+            if os.fspath(path) == str(bad_dir):
+                raise OSError(5, "Input/output error", str(bad_dir))
+            return real_scandir(path)
 
-        monkeypatch.setattr(Path, "rglob", fake_rglob)
+        monkeypatch.setattr(os, "scandir", fake_scandir)
 
         config = WatchConfig(
             watch_dirs=[bad_dir, good_dir],
@@ -357,6 +359,29 @@ class TestFolderWatcher:
 
         ready = [p.name for p, r in results if r == "ready"]
         assert "reachable.pdf" in ready
+        assert "unlistable.pdf" not in ready
+        assert str(bad_dir) in caplog.text
+
+    def test_bound_symlinked_subdir_scanned(self, tmp_path):
+        """BUG-005: a recursive scan descends a symlinked subdirectory."""
+        watched, elsewhere = tmp_path / "watched", tmp_path / "elsewhere"
+        watched.mkdir()
+        elsewhere.mkdir()
+        self._make_old_file(elsewhere / "linked.pdf")
+        (watched / "link").symlink_to(elsewhere, target_is_directory=True)
+
+        config = WatchConfig(
+            watch_dirs=[watched],
+            recursive=True,
+            cooldown_minutes=0,
+            min_file_size=10,
+            db_path=tmp_path / "watcher.db",
+        )
+        watcher = FolderWatcher(config)
+        results = watcher.scan_once()
+        watcher.close()
+
+        assert results == [(watched / "link" / "linked.pdf", "ready")]
 
     def test_int_scan_nonexistent_dir(self, tmp_path):
         """scan_once handles non-existent watch directory gracefully."""
