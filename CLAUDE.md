@@ -28,7 +28,7 @@ When fixing ANY bug, you MUST complete ALL steps before committing:
 4. **Add prevention test** -- write a test that catches the CLASS of error, not just this instance (see "Which test to write" below)
 5. **Search for siblings** -- grep the codebase for the same pattern in other files
 6. **Revalidate existing data** -- if the fix changes ANY logic that determines how data is classified, filtered, displayed, or acted upon, re-run the fixed logic on all existing data
-7. **Persist the pattern** -- update FGT_LOG.md and memory/docs for future sessions
+7. **Persist the pattern** -- update FGT_LOG.md, FGT_DOMAIN_DOC.md (when the lesson is specific to documents) and memory/docs for future sessions
 
 ## Which Test to Write
 
@@ -112,5 +112,5 @@ Bug Response:
 4. PREVENT     -> Add test that catches the CLASS
 5. SEARCH      -> Grep for siblings in CODE
 6. REVALIDATE  -> Check if existing DATA is contaminated
-7. PERSIST     -> Update FGT_LOG.md and memory/docs
+7. PERSIST     -> Update FGT_LOG.md, FGT_DOMAIN_DOC.md (when the lesson is specific to documents) and memory/docs
 ```

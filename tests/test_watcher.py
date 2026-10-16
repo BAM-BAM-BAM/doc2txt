@@ -127,18 +127,6 @@ class TestInvFileReadiness:
         assert not ready
         assert "Vim swap" in reason
 
-    def test_bound_temp_file_not_ready(self, checker, tmp_path):
-        """Cloud sync temp files are not ready."""
-        tmp_file = tmp_path / "download.tmp"
-        tmp_file.write_bytes(b"x" * 200)
-        import os
-        old_time = time.time() - 3600
-        os.utime(tmp_file, (old_time, old_time))
-
-        ready, reason = checker.is_ready(tmp_file)
-        assert not ready
-        assert "temp pattern" in reason
-
 
 class TestProcessedTracker:
     """Tests for ProcessedTracker."""

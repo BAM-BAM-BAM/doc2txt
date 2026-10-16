@@ -93,3 +93,18 @@ if [ -f "$WATCHER_LOG" ]; then
 else
     warn "watcher — watcher.log not found (nightly cron output missing)"
 fi
+
+# --- lang-app stop hook: owner merge pending ---
+#
+# lang-app's copy of the stop-hook `grep -qE "$1"` race is fixed in lang-app
+# PR #3, which merge-green-pr leaves to the owner (lang-app main has no branch
+# protection). WARN while lang-app's checked-out hook still has the race, so
+# the merge is not forgotten. Sunsetting: delete this block once it PASSes.
+LANG_APP_HOOK="$HOME/projects/lang-app/scripts/fgt_stop_check.sh"
+if [ -f "$LANG_APP_HOOK" ]; then
+    if grep -qE 'grep -[a-zA-Z]*q[a-zA-Z]* "\$1"' "$LANG_APP_HOOK"; then
+        warn "lang-app — stop hook still pipes git log into grep -q: merge lang-app #3, then pull lang-app main"
+    else
+        pass "lang-app — stop hook reads the whole git log stream"
+    fi
+fi

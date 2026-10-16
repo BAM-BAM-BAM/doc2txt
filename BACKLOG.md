@@ -11,16 +11,26 @@ If it's not in this file, it doesn't exist.
 ### Architecture
 - [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
-### Watcher
-- [ ] `FileReadinessChecker.is_ready`'s `CLOUD_SYNC_TEMP_PATTERNS` check cannot match anything `scan_once` passes it: discovery yields only document extensions, and no pattern ends in one (`*.tmp`, `*.part`, `desktop.ini`, …). Delete it, or make discovery use it -- source: BUG-009 2026-10-16
+### OCR
+- [ ] **Scanned PDFs convert to empty `.md` files and are recorded as processed.** Found 2026-10-16 while reviewing the split plan.
+  - Tesseract on an image region: `ocr_image_region` passes `clip=` to `page.get_textpage_ocr`, which raises TypeError in pymupdf 1.27.2.3 (`.venv`, the cron interpreter) and 1.26.7 (system). Full-page Tesseract (`--force-ocr`) works.
+  - `resolve_ocr_engine` has no `"auto"` key, so the watcher's default `auto` resolves to Tesseract.
+  - PaddleOCR page OCR raises NotImplementedError (`ConvertPirAttribute2RuntimeAttribute not support`); surya is not installed.
+  - `extract_page_text` catches the exception and falls back to the text layer, so a scanned PDF returns `Created:` with an empty body under both `auto` and `paddle`.
+  - Data: of 6,729 watcher `.md` outputs from PDFs that still exist, 932 have an empty body and 685 have under 100 non-space characters. Of the 932, 82 PDFs have images and no text layer; 850 have no image found by `get_images(full=False)` and no text layer (cause not diagnosed); 922 date from the May 2026 bulk run, 10 since June.
+  - BUG-001 names QUAL-001 as its prevention test for scanned PDFs, but `test_qual_001` extracts a DOCX; no test runs OCR.
+  - Fix needs data revalidation: the 932 rows are marked processed, and their `.md` files exist, so the watcher skips them even when unmarked.
+  - -- source: split plan review 2026-10-16
 
-### Tooling
-- [ ] fgt-config template `templates/scaffold/hooks/fgt_stop_check.sh.tmpl:54`: `changed_in_session` ends a pipe with `grep -qE` under `pipefail`, so `git log` can die of SIGPIPE and the docs check reads "not updated" (11 false blocks in 200 runs here). Fixed in doc2txt's copy; lang-app's copy has the same line -- source: BUG-006..008 session 2026-10-16
-
-### Documentation
-- [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
+### Testing
+- [ ] PRO-002 (`test_pro_002_no_hardcoded_extensions_outside_registry`) cannot fail: it only warns, on 3 lines today (`page_label`, `is_pdf`, `has_pdfs`, all `== '.pdf'`). Making it strict means deciding which per-format checks are allowed -- source: split plan review 2026-10-16
 
 ## Resolved
+
+### Backlog cleanup (2026-10-16)
+- [x] `FileReadinessChecker.is_ready`'s `CLOUD_SYNC_TEMP_PATTERNS` check could not match anything `scan_once` passes it -- deleted with `_matches_pattern` and `test_bound_temp_file_not_ready`; `test_int_scan_finds_ready_files` already asserts a non-document name is never scanned
+- [x] fgt-config template `fgt_stop_check.sh.tmpl:54` and lang-app's copy ended `changed_in_session` with `grep -qE` under `pipefail` -- fixed in fgt-config #57 (merged: template, `examples/demo-py`, a `test-new-project.sh` assertion) and lang-app #3 (open: lang-app main has no branch protection, so the owner merges it; `scripts/sweep.sh` WARNs until lang-app's checked-out hook is fixed). The five older project copies and two `fgt-sync.sh` pipelines are tracked in fgt-config's BACKLOG
+- [x] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- BUG-004, 005, 007 and 009 lessons added (bug patterns, constants, LibreOffice Writer); Bug Abstraction step 7 in CLAUDE.md now names FGT_DOMAIN_DOC.md, so each future bug fix carries this forward
 
 ### CLI (2026-10-16, BUG-009)
 - [x] Batch discovery did not skip `~$` Word owner files, so `doc2txt.py -r` reported them FAILED and exited 1 -- `iter_documents` skips `OFFICE_OWNER_PREFIX`; watcher's unreachable duplicate removed; test_bound_019, test_bound_word_owner_file_not_scanned
