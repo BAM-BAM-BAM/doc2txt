@@ -130,3 +130,14 @@
 - `shutil.get_terminal_size()` prefers `$COLUMNS` and queries `sys.__stdout__`; `os.get_terminal_size(sys.stdout.fileno())` reads the live width of the actual stdout and raises when it is not a terminal
 - `script -qec "stty cols N; …" /dev/null` gives a real terminal for checking width-dependent output from a non-interactive shell
 
+### 2026-10-16: Failures count as failed everywhere; the watcher retries them; one `--formats` parser (BUG-006..008)
+
+**Change**: The three CLI bugs in BACKLOG, with their siblings. Results are classified by their exact status label (`result_status()`, `STATUS_*` constants, `count_outcome()` shared by `run_simple` and `run_with_hud`). The watcher marks only created and skipped documents, so failures are retried, and a dry run marks nothing. `~$` Word owner files are filtered by the previously unused `EDITOR_LOCK_PATTERNS`. `check_libreoffice_available()` requires `lowriter`. `parse_formats()` serves batch mode, `--watch` and the watcher CLI. Also: the stop hook's `grep -q` SIGPIPE race, and a sweep check for a missing or unreachable watch directory. 8 new tests (136 total).
+
+**Evidence**: On main, an invalid `Skipped items.pdf` gave `1 skipped, 0 failed` and exit 0 with `-j 1`, but exit 1 with `-j 2`. `watcher.log` had 484 failed files recorded as skipped and processed since 2026-05-15, and 0 successful DOC/RTF/ODT conversions: only `libreoffice-calc` was installed. `/mnt/g` was logged missing in 56 runs without the sweep reporting it. The stop hook's docs check gave 11 false negatives in 200 runs before the fix and 0 after.
+
+**Lessons**:
+- An outcome encoded in message text must be parsed at a fixed position (the label before `": "`), never by substring: filenames contain words
+- `grep -q` at the end of a pipe under `pipefail` is racy: the writer can die of SIGPIPE after the match and fail the pipeline
+- `which libreoffice` does not mean Writer formats convert; a Calc-only install exits 0 with no output
+

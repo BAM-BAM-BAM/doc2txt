@@ -139,6 +139,18 @@ class TestInvFileReadiness:
         assert not ready
         assert "temp pattern" in reason
 
+    def test_bound_word_owner_file_not_ready(self, checker, tmp_path):
+        """BUG-007: a Word owner file (~$name.docx) is never processed."""
+        owner = tmp_path / "~$report.docx"
+        owner.write_bytes(b"x" * 200)
+        import os
+        old_time = time.time() - 3600
+        os.utime(owner, (old_time, old_time))
+
+        ready, reason = checker.is_ready(owner)
+        assert not ready
+        assert "~$" in reason
+
 
 class TestProcessedTracker:
     """Tests for ProcessedTracker."""
@@ -419,6 +431,50 @@ class TestFolderWatcher:
         md_path = tmp_path / "watched.md"
         assert md_path.exists()
         assert "Watched content" in md_path.read_text()
+
+    def _process(self, tmp_path, **config):
+        """Scan tmp_path, process the ready files, then rescan; returns (stats, rescan, tracker rows)."""
+        watcher = FolderWatcher(WatchConfig(
+            watch_dirs=[tmp_path], cooldown_minutes=0, min_file_size=10,
+            db_path=tmp_path / "watcher.db", use_ocr=False, **config,
+        ))
+        try:
+            stats = watcher.process_ready_files(watcher.scan_once())
+            return stats, watcher.scan_once(), watcher.tracker.get_stats()["total_tracked"]
+        finally:
+            watcher.close()
+
+    def test_bound_failed_document_retried(self, tmp_path):
+        """BUG-007: a FAILED result counts as failed and is not marked, so the next scan retries it."""
+        bad = tmp_path / "bad.pdf"
+        self._make_old_file(bad)
+
+        stats, rescan, rows = self._process(tmp_path)
+        assert stats == {"processed": 0, "failed": 1, "skipped": 0}
+        assert rescan == [(bad, "ready")]
+        assert rows == 0
+
+    def test_bound_existing_md_skipped_and_marked(self, tmp_path):
+        """A document whose .md already exists counts as skipped and is marked, so it is not rescanned."""
+        self._make_old_file(tmp_path / "done.docx")
+        (tmp_path / "done.md").write_text("existing")
+
+        stats, rescan, rows = self._process(tmp_path)
+        assert stats == {"processed": 0, "failed": 0, "skipped": 1}
+        assert rescan == []
+        assert rows == 1
+
+    def test_bound_dry_run_marks_nothing(self, tmp_path):
+        """BUG-007: a dry run records no rows, so it never changes what a later real run does."""
+        self._make_old_file(tmp_path / "new.docx")
+        self._make_old_file(tmp_path / "done.docx")
+        (tmp_path / "done.md").write_text("existing")
+
+        stats, rescan, rows = self._process(tmp_path, dry_run=True)
+        assert stats == {"processed": 1, "failed": 0, "skipped": 1}
+        assert len(rescan) == 2
+        assert rows == 0
+        assert not (tmp_path / "new.md").exists()
 
 
 class TestCli:

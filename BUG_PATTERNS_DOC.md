@@ -96,3 +96,54 @@ does with links, cycles and unreadable entries, implement it once, and test each
 `pro_003` keeps new call sites from bypassing it. Sunset `pro_003` once discovery lives
 in its own module with these tests (BACKLOG split item).
 
+
+---
+
+### BUG-006: A filename containing a status word decided how its result was counted
+
+| Field | Value |
+|-------|-------|
+| **Symptom** | `run_simple` counted `FAILED: Skipped items.pdf - <error>` as skipped and exited 0. With `--improve` it counted `Created: Kept receipts.md` as kept. The same input with `-j 2` reported 1 failed and exited 1. |
+| **Root Cause** | `process_document` returns its outcome only as message text (`<status>: <name>[ - <error>]`). `run_simple` and `run_with_hud` re-derived it with `"Improved:" in message`, `"Kept" in message` and `"Skipped" in message`, and those substring tests also match the filename. The parallel path was unaffected because it reads `FileResult` flags. |
+| **Fix** | `STATUS_IMPROVED`/`STATUS_KEPT`/`STATUS_SKIPPED` constants, used by both message producers and `_status_width`. `result_status(message)` returns the text before the first `": "`, which is always the label because no label contains `": "`. `count_outcome()` compares that exact label, and both sequential runners call it; any unrecognised unsuccessful result counts as failed. |
+| **Principle Violated** | #3 (Single Source of Truth) — the outcome was produced in one place and re-parsed, differently, in two others. |
+| **Prevention Test** | test_fgt_categories.py: `test_bound_016` (`Skipped items.pdf` + `Kept receipts.docx`, `-j 1` and `-j 2`, with and without `--improve`: the same summary, exit 1); `test_pro_004` (no `in message` in doc2txt.py or doc2txt_watcher.py; the only check on curses-only `run_with_hud`; sunset when `process_document` returns a structured status). |
+| **Siblings** | `run_with_hud` (same block, fixed). The watcher's else-branch (BUG-007). `doc2txt_hud.py:267` colours a log line red when it contains `"FAIL"`; display only, left unchanged. |
+| **Data Revalidation** | None stored: summaries and exit codes are not persisted. |
+
+**Pattern:** When an outcome travels as text, parse it in one function at a fixed
+position, and compare exact labels taken from the constants the producer uses.
+
+---
+
+### BUG-007: The watcher recorded failed documents as processed, so they were never retried
+
+| Field | Value |
+|-------|-------|
+| **Symptom** | `watcher.log` had 485 `Skipped: <path> -> FAILED: …` lines for 484 files (2026-05-15..10-05), and 0 `Failed:` lines. Each failed file got a `watcher.db` row and was never attempted again. 382 failed on 2026-05-15 with "LibreOffice is required", 58 with "LibreOffice conversion produced no output", 29 "File is not a zip file" (5 of them `~$` Word owner files), 15 "document closed or encrypted". |
+| **Root Cause** | `process_document` returns extraction errors as `(False, "FAILED: …")` instead of raising. `process_ready_files` sent every unsuccessful result to its else-branch, written for `Skipped (exists)`, which marks the file processed and logs it as skipped. The except-branch, which leaves a file unmarked, is reached only by exceptions outside `process_document`. |
+| **Fix** | `process_ready_files` marks a file only for a success or `Skipped (exists)`; anything else counts as failed, logs `ERROR Failed:` and is retried on the next scan. A dry run marks nothing (it used to mark both, so a later real run skipped those files). `is_ready` also checks `EDITOR_LOCK_PATTERNS`, which was defined but unused, so `~$` owner files are never processed. `check_libreoffice_available()` looks for `lowriter`: only `libreoffice-calc` was installed (2026-05-18), and `libreoffice` from a Calc-only install exits 0 without output for Writer documents. `libreoffice-writer` ships `/usr/bin/lowriter` (checked with `dpkg -c`). |
+| **Principle Violated** | #9 (Defenses Must Be Operational) — a failure was stored as completed, and the lock filter existed without being used. #7 (Verify Before Trust) — the availability check trusted the `libreoffice` binary to convert Writer formats. |
+| **Prevention Test** | test_watcher.py: `test_bound_failed_document_retried` (invalid PDF: failed=1, not marked, rescanned as ready), `test_bound_existing_md_skipped_and_marked`, `test_bound_dry_run_marks_nothing` (new and existing-`.md` documents: 0 rows), `test_bound_word_owner_file_not_ready`. test_fgt_categories.py: `test_bound_018` (`libreoffice` without `lowriter` is unavailable). |
+| **Siblings** | Every `mark_processed` call (2, both now gated). Batch mode (`iter_documents`) still processes `~$` owner files and reports them FAILED (exit 1); a different behaviour change, filed in BACKLOG. Retry cost: every unresolved failure is retried on every scan, once a night under the cron's `--once` and every 30 minutes in the polling loop (no use observed). The 39 document defects (15 encrypted PDFs, 24 broken DOCX) are retried until the files are fixed or removed. A retry limit was rejected: it needs a schema column and a reset command, and would hide a later environment fix such as installing Writer. |
+| **Data Revalidation** | 2026-10-16, with no watcher process running and before the next 02:00 run: `~/.doc2txt/watcher.db` copied to `watcher.db.bak-2026-10-16`, then the 484 rows for logged FAILED paths (all with NULL `output_path`) deleted in one transaction; 18,800 rows remain, 10,529 of them `Skipped (exists)` with NULL `output_path`. The next runs retry the 484: 350 of the 396 on `/mnt/d` still exist, and the 88 on `/mnt/g` wait for that mount. The DOC/RTF/ODT ones fail at once until `libreoffice-writer` is installed. |
+
+**Pattern:** Record a unit of work as done only on an outcome that is done. A tracker
+that treats "attempted" as "completed" turns every transient failure into a permanent one.
+
+---
+
+### BUG-008: `--formats` was parsed three ways
+
+| Field | Value |
+|-------|-------|
+| **Symptom** | `--watch --formats PDF` matched nothing, and `--formats "pdf, docx"` dropped docx; `--watch` never rejected an unsupported format. The watcher CLI rejected `PDF` and `pdf, docx` as unsupported. Batch mode rejected `pdf,` as `Unsupported format(s): .`. |
+| **Root Cause** | Batch mode, `--watch` and the watcher CLI each built the extension set with their own expression: one stripped and lowercased, one did neither, one dropped empty items only. |
+| **Fix** | `parse_formats()` in doc2txt_models.py: strip, lowercase, one leading dot, drop empty and dot-only items; raises `ValueError` for an empty or unsupported result. `doc2txt.py main()` calls it once, before the watch branch, so batch and `--watch` share the parse and the check (exit 1); the watcher CLI raises `SystemExit` with the same message. |
+| **Principle Violated** | #3 (Single Source of Truth). |
+| **Prevention Test** | test_fgt_categories.py: `test_bound_017` (`"PDF, .Docx,"` gives `{.pdf, .docx}` in all three entry points; `exe`, `,` and an empty value are rejected in all three). |
+| **Siblings** | No other `--formats` readers (`grep -n "formats" doc2txt*.py`). |
+| **Data Revalidation** | None stored. |
+
+**Pattern:** One flag, one parser. When two entry points accept the same flag, the
+parse and the validation live in a function both import.
