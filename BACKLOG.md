@@ -19,9 +19,9 @@ From the quarterly estate review (fgt-config METHODOLOGY_LOG, 2026-10-16).
       157 folder/stem groups collide and 150 documents have no markdown.
       FGT_DOMAIN_DOC INV-004 (output keeps the input's stem) forces the
       collision; needs a naming decision.
-- [ ] **Five tests cannot fail** (each mutation-confirmed):
-      `test_pro_002_no_hardcoded_extensions_outside_registry` (warns, never
-      asserts); `test_eval_uncertainty_highest_at_half` (recomputes the
+- [ ] **Four tests cannot fail** (each mutation-confirmed; a fifth,
+      `test_pro_002`, was deleted with BUG-010):
+      `test_eval_uncertainty_highest_at_half` (recomputes the
       formula inline); `test_eval_shuffle_produces_different_order` and
       `test_int_shuffle` (pass with the shuffle removed);
       `test_inv_thresholds_cover_all_cases` (re-implements the partition);
@@ -38,21 +38,17 @@ From the quarterly estate review (fgt-config METHODOLOGY_LOG, 2026-10-16).
       (`git remote prune origin --dry-run`); local `fgt-catchup-2026-09-28`
       (squash-merged as #2).
 
-### OCR
-- [ ] **Scanned PDFs convert to empty `.md` files and are recorded as processed.** Found 2026-10-16 while reviewing the split plan.
-  - Tesseract on an image region: `ocr_image_region` passes `clip=` to `page.get_textpage_ocr`, which raises TypeError in pymupdf 1.27.2.3 (`.venv`, the cron interpreter) and 1.26.7 (system). Full-page Tesseract (`--force-ocr`) works.
-  - `resolve_ocr_engine` has no `"auto"` key, so the watcher's default `auto` resolves to Tesseract.
-  - PaddleOCR page OCR raises NotImplementedError (`ConvertPirAttribute2RuntimeAttribute not support`); surya is not installed.
-  - `extract_page_text` catches the exception and falls back to the text layer, so a scanned PDF returns `Created:` with an empty body under both `auto` and `paddle`.
-  - Data: of 6,729 watcher `.md` outputs from PDFs that still exist, 932 have an empty body and 685 have under 100 non-space characters. Of the 932, 82 PDFs have images and no text layer; 850 have no image found by `get_images(full=False)` and no text layer (cause not diagnosed); 922 date from the May 2026 bulk run, 10 since June.
-  - BUG-001 names QUAL-001 as its prevention test for scanned PDFs, but `test_qual_001` extracts a DOCX; no test runs OCR.
-  - Fix needs data revalidation: the 932 rows are marked processed, and their `.md` files exist, so the watcher skips them even when unmarked.
-  - -- source: split plan review 2026-10-16
-
-### Testing
-- [ ] PRO-002 (`test_pro_002_no_hardcoded_extensions_outside_registry`) cannot fail: it only warns, on 3 lines today (`page_label`, `is_pdf`, `has_pdfs`, all `== '.pdf'`). Making it strict means deciding which per-format checks are allowed -- source: split plan review 2026-10-16
+### OCR follow-ups (BUG-010, 2026-10-16)
+- [ ] **Regenerate the outputs on `/mnt/g` once it is mounted.** Its 4,142 PDF rows could not be classified or regenerated; run the BUG-010 regeneration job's classification and `run.py` over them (`~/.doc2txt/revalidate-ocr-2026-10-16/`). Depends on the `/mnt/g` item above.
+- [ ] **CLI outputs outside the watch folders were made without image OCR**, including the Personal Vault run of 2026-10-16. Nothing records them. Rerun with `./doc2txt.py -r -f <dir>` (for the vault: mount it as in `.claude/CLAUDE.md`, then run on `~/mnt/vault`).
+- [ ] **17 one-page PDFs hold 61–609 words drawn as vector outlines** (about 11 distinct documents) and produce empty outputs: no text layer and no image, so only full-page OCR (`--force-ocr`) reads them. Decide whether a page with no text and no image should get full-page OCR.
+- [ ] **The watcher has no time limit for very large image regions.** 3 documents have regions over 50 Mpx; a synthetic 41-Mpx strip did not finish OCR in 45 minutes. A new document like that would stall a nightly run.
 
 ## Resolved
+
+### OCR (2026-10-16, BUG-010)
+- [x] Scanned PDFs converted to empty `.md` files and were recorded as processed -- Tesseract region OCR fixed (`pdfocr_tobytes`), rotated pages, zero-area images and duplicate text-layer words handled, one engine table (`OCR_FALLBACKS`) for the CLI and the watcher, OCR errors fail the document; test_qual_004, test_bound_020, test_bound_021, test_contract_ocr_engine_resolution; `scripts/ocr_canary.py` run daily by the sweep. Regeneration of the 5,071 affected outputs is tracked by the sweep
+- [x] PRO-002 could not fail (it only warned) -- deleted; PATTERNS_DOC's PRO example now lists the PRO tests that can fail
 
 ### Architecture (2026-10-16)
 - [x] Further split doc2txt.py (2,447 lines) into extractors.py + ocr.py + cli.py -- `doc2txt_ocr.py` (845), `doc2txt_extractors.py` (636, with discovery and status labels so the watcher never imports the CLI), `doc2txt.py` stays the CLI (996); code moved unchanged (AST check), aliases `process_pdf`/`process_pdf_worker` deleted; PRO-001 limit 3,800 → 1,200; PRO-002 and PRO-004 scan every `doc2txt*.py`

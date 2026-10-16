@@ -129,11 +129,11 @@ When extraction logic changes, update fixtures deliberately (not silently).
 
 ### Proactive Detection (PRO-*)
 
-```python
-def test_pro_no_hardcoded_extensions():
-    """No extension strings outside SUPPORTED_EXTENSIONS."""
-    # Scan source for '.pdf', '.docx' etc. outside the constant definition
-```
+A PRO test scans the source of every `doc2txt*.py` module for a structural
+anti-pattern and must be able to fail: `test_pro_001` (module size, see Module
+Size Enforcement below), `test_pro_003` (discovery only through
+`iter_documents`), `test_pro_004` (no substring status checks). A scan that can
+only warn is not a defense; PRO-002 did that and was removed (BUG-010 PR).
 
 ---
 

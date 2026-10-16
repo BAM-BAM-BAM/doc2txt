@@ -172,3 +172,16 @@
 - A source-scanning test that names its files loses coverage silently when code moves; glob the module family instead
 - ruff does not report a `global` name whose top-level assignment moved to another module (the `global` statement suppresses F821), and this OCR code swallows the NameError; check `global` pairs when moving code
 - `patch("module.name")` replaces the name where it is looked up; after a move, retarget it to the defining module, and make sure the old module no longer imports the name, so a stale target fails loudly
+
+### 2026-10-16: Image OCR works, fails loudly, and has one engine table (BUG-010)
+
+**Change**: Tesseract region OCR uses `pix.pdfocr_tobytes` (pymupdf rejected `get_textpage_ocr(clip=)`), renders rotated pages with `rotation_matrix`, skips zero-sized pixmaps before `tobytes`, and drops OCR text that repeats a scanned PDF's invisible text layer. `OCR_FALLBACKS` replaces four engine chains; PaddleOCR runs only when named. OCR errors now fail the document. PRO-002 deleted. `scripts/ocr_canary.py` runs daily from the sweep under the cron's interpreter; a temporary sweep check tracks the regeneration of the 5,071 affected outputs. 139 tests.
+
+**Evidence**: 5,071 outputs from PDFs with images (854 empty) had no image text; on main a scanned test PDF gives `Created:` with an empty body, and the CLI under `.venv` picks `paddle`. Fixed code on 15 real documents added text (80 → 9,886 and 1,996 → 3,347 non-space characters). The plan went through three reviewers and four confirmation rounds; they found the CLI's own engine chain, duplicate text, rotated-page regions, zero-area images and an edge sliver, each reproduced before the fix.
+
+**Lessons**:
+- `except Exception: fall back` around a step whose empty result is valid turns every failure into silent data loss; the test for the step must assert a non-empty result
+- Image rects and text words are in unrotated page space; `get_pixmap(clip=)` is in rotated space
+- A scanned PDF often carries an invisible OCR text layer; OCRing its image again duplicates every word
+- `pixmap.tobytes()` raises on a zero side, and a rect test misses a 0.000122-pt sliver; check the pixmap
+- Check the cron's own interpreter: the defect lived in `.venv` (paddle) and in code no test ran

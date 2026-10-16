@@ -23,6 +23,7 @@ from pathlib import Path
 
 from doc2txt_extractors import iter_documents
 from doc2txt_models import SUPPORTED_EXTENSIONS, parse_formats
+from doc2txt_ocr import OCR_FALLBACKS
 
 logger = logging.getLogger("doc2txt.watcher")
 
@@ -429,7 +430,8 @@ def _build_arg_parser():
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing .md outputs.")
     p.add_argument("--dry-run", action="store_true", help="Scan only; do not convert.")
     p.add_argument("--no-ocr", action="store_true", help="Disable OCR fallback.")
-    p.add_argument("--ocr-engine", default="auto", help="OCR engine: auto|surya|paddle (default: auto).")
+    p.add_argument("--ocr-engine", default="auto", choices=sorted(OCR_FALLBACKS),
+                   help="OCR engine (default: auto = surya, falling back to tesseract).")
     p.add_argument("--force-ocr", action="store_true", help="OCR every page regardless of text detection.")
     p.add_argument("--once", action="store_true",
                    help="Run a single scan cycle and exit (for cron/systemd-timer scheduling).")

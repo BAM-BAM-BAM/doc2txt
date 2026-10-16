@@ -93,3 +93,55 @@ if [ -f "$WATCHER_LOG" ]; then
 else
     warn "watcher — watcher.log not found (nightly cron output missing)"
 fi
+
+# --- OCR canary: the cron's interpreter can OCR a scanned page ---
+#
+# Justification: production OCR failed silently in 2 ways for 5 months (pymupdf rejected
+# get_textpage_ocr's clip argument; PaddleOCR 3.3 fails on this CPU), and 5,071 outputs
+# lost the text in their images (BUG-010). The cron's .venv changes without commits, and
+# CI has no tesseract, so no test sees it. Runs the main checkout at most once a day;
+# the stamp is written only on success. Retire when CI runs OCR with the cron's versions.
+OCR_HOME="$HOME/projects/doc2txt"
+OCR_STAMP="$HOME/.doc2txt/ocr-canary.ok"
+if [ -x "$OCR_HOME/.venv/bin/python" ] && [ -f "$OCR_HOME/scripts/ocr_canary.py" ]; then
+    if [ -n "$(find "$OCR_STAMP" -mmin -1440 2>/dev/null)" ]; then
+        pass "ocr — canary passed within 24h"
+    elif CANARY_OUT=$(env -i HOME="$HOME" PATH=/usr/bin:/bin "$OCR_HOME/.venv/bin/python" "$OCR_HOME/scripts/ocr_canary.py" 2>/dev/null); then
+        mkdir -p "$(dirname "$OCR_STAMP")" && touch "$OCR_STAMP"
+        pass "ocr — canary read a scanned page under the cron interpreter"
+    else
+        warn "ocr — canary failed under the cron interpreter: $(printf '%s' "$CANARY_OUT" | tail -1)"
+    fi
+fi
+
+# --- OCR regeneration progress (temporary) ---
+#
+# BUG-010's data revalidation: a resumable job outside the repo regenerates the 5,071
+# outputs that lack their image text. WARN until it has finished with no failures, so a
+# job stopped by a WSL shutdown is resumed. Delete this block, and file any failures in
+# BACKLOG, once it PASSes.
+REGEN_DIR="$HOME/.doc2txt/revalidate-ocr-2026-10-16"
+if [ -d "$HOME/.doc2txt" ]; then
+    if [ ! -f "$REGEN_DIR/summary.json" ]; then
+        warn "ocr regeneration — not started (BUG-010 data revalidation)"
+    else
+        REGEN=$(python3 -c 'import json, sys
+s = json.load(open(sys.argv[1]))
+print(s["remaining"], s["counts"].get("failed", 0) + s["counts"].get("timeout", 0),
+      ", ".join(f"{k} {v}" for k, v in s["counts"].items()), "of", s["targets"])' "$REGEN_DIR/summary.json" 2>/dev/null)
+        read -r REGEN_LEFT REGEN_FAILED REGEN_TEXT <<<"$REGEN"
+        if [ -z "$REGEN_LEFT" ]; then
+            warn "ocr regeneration — cannot read $REGEN_DIR/summary.json"
+        elif [ "$REGEN_LEFT" -gt 0 ]; then
+            if kill -0 "$(cat "$REGEN_DIR/run.pid" 2>/dev/null)" 2>/dev/null; then
+                warn "ocr regeneration — running: $REGEN_TEXT, $REGEN_LEFT remaining"
+            else
+                warn "ocr regeneration — stopped: $REGEN_TEXT, $REGEN_LEFT remaining; resume: bash $REGEN_DIR/start.sh"
+            fi
+        elif [ "$REGEN_FAILED" -gt 0 ]; then
+            warn "ocr regeneration — finished with $REGEN_FAILED failed ($REGEN_TEXT); file them in BACKLOG and retire this check"
+        else
+            pass "ocr regeneration — finished: $REGEN_TEXT"
+        fi
+    fi
+fi

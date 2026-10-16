@@ -5,7 +5,7 @@ Extract text from PDFs and create markdown files with OCR support and parallel p
 ## Features
 
 - **Text Extraction**: Converts PDF files to markdown format
-- **Multiple OCR Engines**: PaddleOCR (default), Surya (high accuracy), or Tesseract
+- **OCR for images in PDFs**: Surya when installed, otherwise Tesseract; PaddleOCR only when named
 - **Parallel Processing**: Utilizes all CPU cores for faster batch processing
 - **Quality Scoring**: `--improve` mode re-extracts and only overwrites if quality is better
 - **Retro HUD**: Optional 80's style terminal interface with progress tracking
@@ -25,17 +25,23 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Optional: Install Surya for highest accuracy (requires GPU)
+# Tesseract does the OCR unless Surya is installed
+sudo apt install tesseract-ocr
+
+# Optional: Surya (GPU recommended); not installed on the reference machine
 pip install surya-ocr
 ```
 
 ## OCR Engines
 
-| Engine | Accuracy | Speed | Requirements |
-|--------|----------|-------|--------------|
-| `paddle` (default) | ~90% | Fast | CPU or GPU |
-| `surya` | ~97% | Medium | GPU recommended |
-| `tesseract` | ~85% | Fast | System package |
+| `--ocr-engine` | Tries, in order | Notes |
+|--------|----------|-------|
+| `surya` (CLI default) | surya, tesseract | Surya needs `pip install surya-ocr`; GPU recommended |
+| `auto` (watcher default) | surya, tesseract | Same as `surya` |
+| `tesseract` | tesseract | System package `tesseract-ocr` |
+| `paddle` | paddle | Only when named: PaddleOCR 3.3 fails on CPU here (oneDNN) |
+
+An OCR error fails the document (`FAILED:`); no `.md` is written, and the watcher retries it.
 
 ## Usage
 
@@ -81,7 +87,7 @@ pip install surya-ocr
 | `-q, --quiet` | Suppress all output except errors |
 | `--hud` | Show retro 80's style HUD |
 | `-j N, --jobs N` | Number of parallel workers (default: CPU count) |
-| `--ocr-engine` | OCR engine: `paddle` (default), `surya`, or `tesseract` |
+| `--ocr-engine` | `surya` (default), `auto`, `tesseract` or `paddle`; see OCR Engines |
 | `-n, --dry-run` | List files without processing |
 | `-f, --force` | Overwrite existing markdown files |
 | `--improve` | Re-extract and only overwrite if better quality |
@@ -99,7 +105,7 @@ Creates a `.md` file alongside each PDF with:
 
 - Python 3.10+
 - PyMuPDF
-- PaddleOCR (default OCR engine)
+- Tesseract (`tesseract-ocr`), or Surya, for OCR
 - Pillow
 
 ## License
