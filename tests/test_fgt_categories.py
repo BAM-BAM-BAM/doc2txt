@@ -457,6 +457,77 @@ class TestBoundary:
         assert main() == 1
         assert f"cannot read {tmp_path}: Permission denied" in capsys.readouterr().err
 
+    def test_bound_016_status_words_in_names_counted_by_status(self, tmp_path, monkeypatch, capsys):
+        """BUG-006: a filename containing a status word does not change how its result is counted.
+
+        Sequential and parallel runs must print the same summary and both exit 1.
+        """
+        import docx
+        from doc2txt import main
+
+        summaries = {
+            (): "Summary: 1 processed, 0 skipped, 1 failed",
+            ("--improve",): "Summary: 1 processed, 0 improved, 0 kept existing, 1 failed",
+        }
+        for extra, summary in summaries.items():
+            for jobs in ("1", "2"):
+                root = tmp_path / f"{'-'.join(extra) or 'plain'}-j{jobs}"
+                root.mkdir()
+                (root / "Skipped items.pdf").write_bytes(b"not a pdf " * 20)
+                docx.Document().save(str(root / "Kept receipts.docx"))
+                monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-r", "--no-ocr", "-j", jobs, *extra, str(root)])
+                assert main() == 1, (extra, jobs)
+                assert summary in capsys.readouterr().out.splitlines(), (extra, jobs)
+
+    def test_bound_017_formats_same_in_all_entrypoints(self, tmp_path, monkeypatch):
+        """BUG-008: batch mode, --watch and the watcher CLI parse and check --formats alike."""
+        import doc2txt
+        import doc2txt_watcher
+
+        batch, watch = [], []
+
+        def fake_find(directory, **kwargs):
+            batch.append(kwargs["formats"])
+            return []
+
+        class StubWatcher:
+            def __init__(self, config):
+                watch.append(config.formats)
+
+            def run(self):
+                pass
+
+            def scan_once(self):
+                return []
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(doc2txt, "find_documents", fake_find)
+        monkeypatch.setattr(doc2txt_watcher, "FolderWatcher", StubWatcher)
+        watcher_cli = ["--watch-dir", str(tmp_path), "--once", "--db-path", str(tmp_path / "w.db")]
+
+        for mode in ([], ["--watch"]):
+            monkeypatch.setattr(sys, "argv", ["doc2txt.py", *mode, "--no-ocr", "--formats", "PDF, .Docx,", str(tmp_path)])
+            assert doc2txt.main() == 0, mode
+        doc2txt_watcher.main([*watcher_cli, "--formats", "PDF, .Docx,"])
+        assert batch + watch == [{".pdf", ".docx"}] * 3
+
+        for bad in ("exe", ","):
+            for mode in ([], ["--watch"]):
+                monkeypatch.setattr(sys, "argv", ["doc2txt.py", *mode, "--no-ocr", "--formats", bad, str(tmp_path)])
+                assert doc2txt.main() == 1, (bad, mode)
+            with pytest.raises(SystemExit):
+                doc2txt_watcher.main([*watcher_cli, "--formats", bad])
+
+    def test_bound_018_libreoffice_check_needs_writer(self, monkeypatch):
+        """A Calc-only LibreOffice install has `libreoffice` but cannot load .doc/.rtf/.odt."""
+        import shutil
+        from doc2txt import check_libreoffice_available
+
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/libreoffice" if name == "libreoffice" else None)
+        assert check_libreoffice_available() is False
+
 
 class TestIntegration:
     """INT-* tests: end-to-end CLI runs."""
@@ -590,3 +661,21 @@ class TestProactive:
             if "rglob(" in line or ".glob(" in line
         ]
         assert not violations, "Use iter_documents():\n" + "\n".join(violations)
+
+    def test_pro_004_no_substring_status_checks(self):
+        """BUG-006: results are classified by result_status(), never by a substring of the message.
+
+        A substring test also matches the filename: "FAILED: Skipped items.pdf - ..."
+        counted as skipped in run_simple and run_with_hud. doc2txt_hud.py is exempt:
+        its "FAIL" in msg only colours a log line.
+        """
+        import re
+
+        project_root = Path(__file__).parent.parent
+        violations = [
+            f"{name}:{i}: {line.strip()}"
+            for name in ("doc2txt.py", "doc2txt_watcher.py")
+            for i, line in enumerate((project_root / name).read_text().splitlines(), 1)
+            if re.search(r"\bin message\b", line)
+        ]
+        assert not violations, "Use result_status():\n" + "\n".join(violations)

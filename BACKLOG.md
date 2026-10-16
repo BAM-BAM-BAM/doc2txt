@@ -11,15 +11,18 @@ If it's not in this file, it doesn't exist.
 ### Architecture
 - [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
-### CLI
-- [ ] `run_simple` counters match substrings anywhere in the message (`"Skipped"`, and with `--improve` `"Improved:"`/`"Kept"`), so a failure on `Skipped items.pdf` or `Kept receipts.pdf` is not counted as failed and the run exits 0; the parallel path uses `FileResult` flags -- source: progress-columns /vet review 2026-10-16
-- [ ] Watcher marks failed documents as processed (`process_ready_files` else-branch), so a FAILED document is never retried -- source: progress-columns /vet review 2026-10-16
-- [ ] `--watch --formats` (doc2txt.py watch-mode branch) builds extensions without `.strip().lower()`, unlike the batch path: `--formats PDF` matches nothing and `--formats "pdf, docx"` drops docx -- source: BUG-005 code review 2026-10-16
+### Tooling
+- [ ] fgt-config template `templates/scaffold/hooks/fgt_stop_check.sh.tmpl:54`: `changed_in_session` ends a pipe with `grep -qE` under `pipefail`, so `git log` can die of SIGPIPE and the docs check reads "not updated" (11 false blocks in 200 runs here). Fixed in doc2txt's copy; lang-app's copy has the same line -- source: BUG-006..008 session 2026-10-16
 
 ### Documentation
 - [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
 
 ## Resolved
+
+### CLI (2026-10-16)
+- [x] `run_simple` counters matched substrings, so a failure on `Skipped items.pdf` counted as skipped and exited 0 -- BUG-006: `result_status()` + `count_outcome()` (also `run_with_hud`), test_bound_016, test_pro_004
+- [x] Watcher marked failed documents as processed, so they were never retried -- BUG-007: failures unmarked and logged as errors, dry run marks nothing, `~$` owner files filtered, Writer check; 484 stored rows revalidated
+- [x] `--watch --formats` built extensions without `.strip().lower()` -- BUG-008: `parse_formats()` shared by batch, `--watch` and the watcher CLI, test_bound_017
 
 ### FGT/OCD standards review (2026-07-07)
 - [x] Commit the watcher CLI entrypoint (doc2txt_watcher.py `main()`/argparse, dirty since 2026-05-13) -- committed as fe1a6dd

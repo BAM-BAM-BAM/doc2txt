@@ -48,9 +48,11 @@ log_block() {
     echo "$(date -Iseconds) $1" >> "$MEMORY_DIR/stop_check_blocks.log" 2>/dev/null || true
 }
 
+# grep reads the whole stream: `grep -q` exits at the first match, git log can then
+# die of SIGPIPE, and under pipefail the match reads as "not changed".
 changed_in_session() {
     git -C "$PROJECT_DIR" log --since="$SESSION_START" --name-only --pretty=format: 2>/dev/null \
-        | grep -qE "$1"
+        | grep -E "$1" >/dev/null
 }
 
 worktree_modified() {

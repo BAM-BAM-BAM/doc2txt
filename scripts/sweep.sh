@@ -34,6 +34,13 @@ SWEEP_DB=""
 #    like success). 72h, not 48h: the log shows benign 1-2 night gaps
 #    when the WSL host is off; 48h would WARN on routine host-off days.
 #
+# 3. watcher-dirs: WARN if a watch directory was logged missing or
+#    unreachable within 72h. Since BUG-004 a dead mount logs a WARNING
+#    and the run carries on, so the directory is silently not watched:
+#    /mnt/g was missing in 56 runs (2026-07..10, every October run)
+#    before anyone noticed, after 18 crashes for the same cause earlier.
+#    Its failed documents are only retried on a run that reaches it.
+#
 # Sunsetting: if neither check has WARNed for 6 months after 2026-07-07,
 # fold them into a single freshness check.
 WATCHER_LOG="$PROJECT_DIR/watcher.log"
@@ -63,6 +70,19 @@ if [ -f "$WATCHER_LOG" ]; then
         fi
     else
         warn "watcher — no dated log lines found in watcher.log"
+    fi
+
+    DIR_CUTOFF=$(date -d "-72 hours" '+%Y-%m-%d %H:%M:%S')
+    MISSING_DIRS=$(awk -v cutoff="$DIR_CUTOFF" '
+        /Watch directory (does not exist|unreachable)/ && substr($0, 1, 19) >= cutoff {
+            sub(/.*Watch directory (does not exist|unreachable, skipping): /, ""); sub(/ \(.*/, ""); dirs[$0] = 1
+        }
+        END { for (d in dirs) printf "%s ", d }
+    ' "$WATCHER_LOG")
+    if [ -n "$MISSING_DIRS" ]; then
+        warn "watcher — watch dir(s) missing or unreachable within 72h: ${MISSING_DIRS% } (not scanned; mount it)"
+    else
+        pass "watcher — every watch dir reachable within 72h"
     fi
 else
     warn "watcher — watcher.log not found (nightly cron output missing)"

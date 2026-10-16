@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from doc2txt import iter_documents
-from doc2txt_models import SUPPORTED_EXTENSIONS
+from doc2txt_models import SUPPORTED_EXTENSIONS, parse_formats
 
 logger = logging.getLogger("doc2txt.watcher")
 
@@ -97,7 +97,7 @@ class FileReadinessChecker:
 
         # Check temp/sync file patterns
         name_lower = path.name.lower()
-        for pattern in CLOUD_SYNC_TEMP_PATTERNS:
+        for pattern in CLOUD_SYNC_TEMP_PATTERNS + EDITOR_LOCK_PATTERNS:
             if self._matches_pattern(name_lower, pattern.lower()):
                 return False, f"matches temp pattern: {pattern}"
 
@@ -339,8 +339,12 @@ class FolderWatcher:
         return results
 
     def process_ready_files(self, scan_results: list[tuple[Path, str]]) -> dict:
-        """Process all ready files from a scan. Returns summary stats."""
-        from doc2txt import process_document
+        """Process all ready files from a scan. Returns summary stats.
+
+        Created and Skipped (exists) results are marked processed; a failure is not,
+        so the next scan retries it. A dry run marks nothing.
+        """
+        from doc2txt import STATUS_SKIPPED, process_document, result_status
 
         ready = [(p, r) for p, r in scan_results if r == "ready"]
         skipped = [(p, r) for p, r in scan_results if r != "ready"]
@@ -359,16 +363,18 @@ class FolderWatcher:
                 )
 
                 if success:
-                    output_path = path.with_suffix(".md")
-                    self.tracker.mark_processed(path, output_path)
+                    if not self.config.dry_run:
+                        self.tracker.mark_processed(path, path.with_suffix(".md"))
                     stats["processed"] += 1
                     logger.info("Processed: %s -> %s", path, message)
-                else:
-                    # "Skipped" by process_document (e.g., .md already exists)
-                    # Still mark as processed so we don't retry every cycle
-                    self.tracker.mark_processed(path)
+                elif result_status(message) == STATUS_SKIPPED:
+                    if not self.config.dry_run:
+                        self.tracker.mark_processed(path)
                     stats["skipped"] += 1
                     logger.info("Skipped: %s -> %s", path, message)
+                else:
+                    stats["failed"] += 1
+                    logger.error("Failed: %s -> %s", path, message)
 
             except Exception as e:
                 stats["failed"] += 1
@@ -479,10 +485,10 @@ def main(argv=None):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    formats = {f if f.startswith(".") else f".{f}" for f in args.formats.split(",") if f.strip()}
-    unknown = formats - set(SUPPORTED_EXTENSIONS)
-    if unknown:
-        raise SystemExit(f"Unsupported format(s): {sorted(unknown)}. Allowed: {sorted(SUPPORTED_EXTENSIONS)}")
+    try:
+        formats = parse_formats(args.formats)
+    except ValueError as e:
+        raise SystemExit(str(e))
 
     config = WatchConfig(
         watch_dirs=args.watch_dir,

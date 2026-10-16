@@ -16,6 +16,7 @@ from pathlib import Path
 from doc2txt_models import (
     __version__,
     SUPPORTED_EXTENSIONS,
+    parse_formats,
     QualityMetrics,  # noqa: F401 (re-exported for tests)
     ImageFeature,
     OCROutcome,  # noqa: F401 (re-exported for tests)
@@ -147,13 +148,25 @@ def _ellipsize(text: str, width: int) -> str:
     return text[:head] + "..." + text[len(text) - (width - 3 - head):]
 
 
+# Status labels that result counters and the watcher compare against.
+# A process_document message is "<status>: <name>[ - <error>]"; no label contains ": ".
+STATUS_IMPROVED = "Improved"
+STATUS_KEPT = "Kept (better quality)"
+STATUS_SKIPPED = "Skipped (exists)"
+
+
+def result_status(message: str) -> str:
+    """The status label of a process_document message: the text before the first ': '."""
+    return message.partition(": ")[0]
+
+
 def _status_width(improve: bool, learning: bool) -> int:
     """Width of the longest status label a run in this mode can print."""
     if learning:
         return len("Skipping (already learned)")
     if improve:
-        return len("Kept (better quality)")
-    return len("Skipped (exists)")
+        return len(STATUS_KEPT)
+    return len(STATUS_SKIPPED)
 
 
 def _terminal_columns() -> int | None:
@@ -199,9 +212,13 @@ def progress_formatter(
 
 
 def check_libreoffice_available() -> bool:
-    """Check if LibreOffice is available for .doc/.rtf/.odt conversion."""
+    """Check if LibreOffice Writer is available for .doc/.rtf/.odt conversion.
+
+    `libreoffice` alone is not enough: a Calc-only install has it, and then exits 0
+    without output for every Writer document. libreoffice-writer ships `lowriter`.
+    """
     import shutil
-    return shutil.which("libreoffice") is not None
+    return shutil.which("lowriter") is not None
 
 
 def check_tesseract_available() -> bool:
@@ -1354,20 +1371,20 @@ def process_document(
                 if stats:
                     stats.md_bytes += len(new_markdown.encode('utf-8'))
                 detail = f"Improved: {old_metrics.total_score:.2f} → {new_metrics.total_score:.2f}"
-                return True, f"Improved: {md_path.name}", detail
+                return True, f"{STATUS_IMPROVED}: {md_path.name}", detail
             else:
                 # Count existing file size for kept files
                 if stats:
                     stats.md_bytes += md_path.stat().st_size
                 detail = f"Kept existing: {old_metrics.total_score:.2f} > {new_metrics.total_score:.2f}"
-                return False, f"Kept (better quality): {source_path.name}", detail
+                return False, f"{STATUS_KEPT}: {source_path.name}", detail
 
         except Exception as e:
             return False, f"FAILED: {source_path.name} - {e}", None
 
     # Standard mode: skip existing unless overwrite
     if md_path.exists() and not overwrite:
-        return False, f"Skipped (exists): {source_path.name}", None
+        return False, f"{STATUS_SKIPPED}: {source_path.name}", None
 
     if dry_run:
         action = "Would overwrite" if md_path.exists() else "Would create"
@@ -1491,13 +1508,13 @@ def process_document_worker(
                 result.md_bytes = len(new_markdown.encode('utf-8'))
                 result.success = True
                 result.was_improved = True
-                result.message = f"Improved: {md_path.name}"
+                result.message = f"{STATUS_IMPROVED}: {md_path.name}"
                 result.improve_detail = f"Improved: {old_metrics.total_score:.2f} → {new_metrics.total_score:.2f}"
             else:
                 result.md_bytes = md_path.stat().st_size
                 result.success = False
                 result.was_kept = True
-                result.message = f"Kept (better quality): {source_path.name}"
+                result.message = f"{STATUS_KEPT}: {source_path.name}"
                 result.improve_detail = f"Kept existing: {old_metrics.total_score:.2f} > {new_metrics.total_score:.2f}"
 
             return result
@@ -1511,7 +1528,7 @@ def process_document_worker(
     # Standard mode: skip existing unless overwrite
     if md_path.exists() and not overwrite:
         result.was_skipped = True
-        result.message = f"Skipped (exists): {source_path.name}"
+        result.message = f"{STATUS_SKIPPED}: {source_path.name}"
         result.processed_bytes = 0  # Didn't process
         return result
 
@@ -1568,6 +1585,26 @@ def aggregate_result(stats: ProcessingStats, result: FileResult, improve_mode: b
     elif result.success:
         stats.processed_files += 1
         stats.processed_bytes += result.processed_bytes
+
+
+def count_outcome(stats: ProcessingStats, success: bool, message: str, file_size: int):
+    """Count one process_document result into processing stats, by its status label."""
+    status = result_status(message)
+    if status == STATUS_IMPROVED:
+        stats.improved_files += 1
+        stats.processed_files += 1
+        stats.processed_bytes += file_size
+    elif status == STATUS_KEPT:
+        stats.kept_existing += 1
+        stats.processed_files += 1
+        stats.processed_bytes += file_size
+    elif success:
+        stats.processed_files += 1
+        stats.processed_bytes += file_size
+    elif status == STATUS_SKIPPED:
+        stats.skipped_files += 1
+    else:
+        stats.failed_files += 1
 
 
 def run_simple_parallel(documents: list[Path], root: Path, args, use_ocr: bool, ocr_engine: str, force_ocr: bool, max_workers: int) -> int:
@@ -1767,21 +1804,7 @@ def run_with_hud(
             if improve_detail:
                 stats.log(f"     {improve_detail}")
 
-            if improve_mode and "Improved:" in message:
-                stats.improved_files += 1
-                stats.processed_files += 1
-                stats.processed_bytes += file_size
-            elif improve_mode and "Kept" in message:
-                stats.kept_existing += 1
-                stats.processed_files += 1  # Count for throughput (we did extract)
-                stats.processed_bytes += file_size
-            elif success:
-                stats.processed_files += 1
-                stats.processed_bytes += file_size
-            elif "Skipped" in message:
-                stats.skipped_files += 1
-            else:
-                stats.failed_files += 1
+            count_outcome(stats, success, message, file_size)
 
             hud.refresh()
 
@@ -1873,21 +1896,7 @@ def run_simple(
                 print(f"    [DEBUG] {msg}")
             stats.log_messages.clear()
 
-        if improve_mode and "Improved:" in message:
-            stats.improved_files += 1
-            stats.processed_files += 1
-            stats.processed_bytes += file_size
-        elif improve_mode and "Kept" in message:
-            stats.kept_existing += 1
-            stats.processed_files += 1
-            stats.processed_bytes += file_size
-        elif success:
-            stats.processed_files += 1
-            stats.processed_bytes += file_size
-        elif "Skipped" in message:
-            stats.skipped_files += 1
-        else:
-            stats.failed_files += 1
+        count_outcome(stats, success, message, file_size)
 
     elapsed = stats.elapsed()
 
@@ -2261,6 +2270,14 @@ def main() -> int:
 
     directory = path.parent if single_file else path
 
+    formats = None
+    if args.formats:
+        try:
+            formats = parse_formats(args.formats)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
     # Watch mode
     if args.watch:
         if single_file:
@@ -2275,10 +2292,6 @@ def main() -> int:
             format="%(asctime)s [%(levelname)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-
-        formats = None
-        if hasattr(args, 'formats') and args.formats:
-            formats = {f".{f.lstrip('.')}" for f in args.formats.split(",")}
 
         config = WatchConfig(
             watch_dirs=[directory],
@@ -2340,16 +2353,6 @@ def main() -> int:
             use_ocr = False
 
     # Find documents
-    # Parse --formats flag
-    formats = None
-    if args.formats:
-        formats = {f'.{f.strip().lower().lstrip(".")}' for f in args.formats.split(',')}
-        unsupported = formats - SUPPORTED_EXTENSIONS
-        if unsupported:
-            print(f"Error: Unsupported format(s): {', '.join(unsupported)}", file=sys.stderr)
-            print(f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
-            return 1
-
     # Determine shuffle: default ON with --learn, unless --no-learn-shuffle
     should_shuffle = False
     if args.learn:

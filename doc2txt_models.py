@@ -11,6 +11,23 @@ __version__ = "1.0.0"
 SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.rtf', '.odt'}
 
 
+def parse_formats(text: str) -> set[str]:
+    """Parse a --formats value such as "PDF, .docx" into {'.pdf', '.docx'}.
+
+    Raises ValueError when it names no format or an unsupported one.
+    """
+    formats = {"." + item.strip().lower().lstrip(".") for item in text.split(",") if item.strip().strip(".")}
+    if not formats:
+        raise ValueError("--formats names no format")
+    unsupported = formats - SUPPORTED_EXTENSIONS
+    if unsupported:
+        raise ValueError(
+            f"Unsupported format(s): {', '.join(sorted(unsupported))}; "
+            f"supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+        )
+    return formats
+
+
 @dataclass
 class QualityMetrics:
     """Quality assessment metrics for extracted text."""
