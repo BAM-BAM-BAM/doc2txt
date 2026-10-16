@@ -12,6 +12,8 @@ If it's not in this file, it doesn't exist.
 - [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
 ### CLI
+- [ ] `run_simple` counters match substrings anywhere in the message (`"Skipped"`, and with `--improve` `"Improved:"`/`"Kept"`), so a failure on `Skipped items.pdf` or `Kept receipts.pdf` is not counted as failed and the run exits 0; the parallel path uses `FileResult` flags -- source: progress-columns /vet review 2026-10-16
+- [ ] Watcher marks failed documents as processed (`process_ready_files` else-branch), so a FAILED document is never retried -- source: progress-columns /vet review 2026-10-16
 - [ ] `--watch --formats` (doc2txt.py watch-mode branch) builds extensions without `.strip().lower()`, unlike the batch path: `--formats PDF` matches nothing and `--formats "pdf, docx"` drops docx -- source: BUG-005 code review 2026-10-16
 
 ### Documentation

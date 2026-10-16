@@ -136,6 +136,68 @@ def find_documents(
     return result
 
 
+def _ellipsize(text: str, width: int) -> str:
+    """Shorten text to width, keeping its first and last characters around '...'.
+
+    ASCII on purpose: a stdout that cannot encode '…' would raise mid-run.
+    """
+    if len(text) <= width:
+        return text
+    head = (width - 3) // 2
+    return text[:head] + "..." + text[len(text) - (width - 3 - head):]
+
+
+def _status_width(improve: bool, learning: bool) -> int:
+    """Width of the longest status label a run in this mode can print."""
+    if learning:
+        return len("Skipping (already learned)")
+    if improve:
+        return len("Kept (better quality)")
+    return len("Skipped (exists)")
+
+
+def _terminal_columns() -> int | None:
+    """Current width of the terminal on stdout, or None when stdout is not one.
+
+    Not shutil.get_terminal_size: that prefers $COLUMNS and queries
+    sys.__stdout__ rather than sys.stdout.
+    """
+    try:
+        return os.get_terminal_size(sys.stdout.fileno()).columns
+    except (OSError, ValueError):
+        return None
+
+
+def progress_formatter(
+    documents: list[Path], root: Path, status_width: int
+) -> Callable[[str, Path], str]:
+    """Return render(message, path) for -v lines: status | folder | file columns.
+
+    message is "<Status>: <name>[ - <error>]"; the folder is path's parent
+    relative to root. On a terminal wide enough, each line is fitted to the
+    current width (FAILED lines keep their full error); otherwise nothing is
+    padded past the status or truncated.
+    """
+    def folder_of(path: Path) -> str:
+        return path.parent.relative_to(root).as_posix()
+
+    longest = max((len(folder_of(p)) for p in documents), default=1)
+
+    def render(message: str, path: Path) -> str:
+        status, _, name = message.partition(": ")
+        folder = folder_of(path)
+        columns = _terminal_columns()
+        avail = (columns or 0) - 1 - status_width - 4
+        if columns is None or avail < 20:
+            return f"{status:<{status_width}}  {folder}  {name}"
+        folder_width = min(longest, avail * 3 // 5)
+        if status != "FAILED":
+            name = _ellipsize(name, avail - folder_width)
+        return f"{status:<{status_width}}  {_ellipsize(folder, folder_width):<{folder_width}}  {name}"
+
+    return render
+
+
 def check_libreoffice_available() -> bool:
     """Check if LibreOffice is available for .doc/.rtf/.odt conversion."""
     import shutil
@@ -1508,12 +1570,13 @@ def aggregate_result(stats: ProcessingStats, result: FileResult, improve_mode: b
         stats.processed_bytes += result.processed_bytes
 
 
-def run_simple_parallel(documents: list[Path], args, use_ocr: bool, ocr_engine: str, force_ocr: bool, max_workers: int) -> int:
+def run_simple_parallel(documents: list[Path], root: Path, args, use_ocr: bool, ocr_engine: str, force_ocr: bool, max_workers: int) -> int:
     """Run processing with simple text output using parallel workers."""
     stats = ProcessingStats()
     stats.total_files = len(documents)
     stats.total_bytes = sum(p.stat().st_size for p in documents)
     improve_mode = getattr(args, 'improve', False)
+    render = progress_formatter(documents, root, _status_width(improve_mode, learning=False))
 
     if args.verbose or args.dry_run:
         if args.dry_run:
@@ -1543,7 +1606,7 @@ def run_simple_parallel(documents: list[Path], args, use_ocr: bool, ocr_engine: 
             aggregate_result(stats, result, improve_mode)
 
             if args.verbose:
-                print(f"  {result.message}")
+                print(render(result.message, result.source_path))
                 if result.improve_detail:
                     print(f"     {result.improve_detail}")
             if getattr(args, 'debug', False) and result.log_messages:
@@ -1751,6 +1814,7 @@ def run_with_hud(
 
 def run_simple(
     documents: list[Path],
+    root: Path,
     args,
     use_ocr: bool,
     ocr_engine: str,
@@ -1762,6 +1826,8 @@ def run_simple(
     stats.total_files = len(documents)
     stats.total_bytes = sum(p.stat().st_size for p in documents)
     improve_mode = getattr(args, 'improve', False)
+    learning = bool(learner and learner.enabled)
+    render = progress_formatter(documents, root, _status_width(improve_mode, learning))
 
     if args.verbose or args.dry_run:
         if args.dry_run:
@@ -1777,12 +1843,12 @@ def run_simple(
         # Skip files already processed when learning is enabled (deduplication)
         if learner and learner.enabled and learner.is_file_processed(doc_path):
             if args.verbose:
-                print(f"Skipping (already learned): {doc_path}")
+                print(render(f"Skipping (already learned): {doc_path.name}", doc_path))
             stats.skipped_files += 1
             continue
 
         if args.verbose:
-            print(f"Processing: {doc_path}")
+            print(render(f"Processing: {doc_path.name}", doc_path))
 
         file_size = doc_path.stat().st_size
 
@@ -1799,7 +1865,7 @@ def run_simple(
         )
 
         if args.verbose:
-            print(f"  {message}")
+            print(render(message, doc_path))
             if improve_detail:
                 print(f"     {improve_detail}")
         if getattr(args, 'debug', False) and stats.log_messages:
@@ -2348,13 +2414,13 @@ def main() -> int:
             if args.hud and not args.dry_run:
                 result = run_with_hud(documents, args, use_ocr, ocr_engine, force_ocr, learner=learner)
             else:
-                result = run_simple(documents, args, use_ocr, ocr_engine, force_ocr, learner=learner)
+                result = run_simple(documents, directory, args, use_ocr, ocr_engine, force_ocr, learner=learner)
         else:
             # Parallel processing (no learner support)
             if args.hud and not args.dry_run:
                 result = run_with_hud_parallel(documents, args, use_ocr, ocr_engine, force_ocr, max_workers)
             else:
-                result = run_simple_parallel(documents, args, use_ocr, ocr_engine, force_ocr, max_workers)
+                result = run_simple_parallel(documents, directory, args, use_ocr, ocr_engine, force_ocr, max_workers)
 
         # Show detailed stats if --learn-stats was requested with --learn
         if args.learn_stats and learner:
