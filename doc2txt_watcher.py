@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from doc2txt import iter_documents
 from doc2txt_models import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger("doc2txt.watcher")
@@ -318,20 +319,12 @@ class FolderWatcher:
                 logger.warning("Watch directory unreachable, skipping: %s (%s)", watch_dir, e)
                 continue
 
-            # Find all supported documents
-            pattern_func = watch_dir.rglob if self.config.recursive else watch_dir.glob
-            try:
-                paths = sorted(pattern_func("*"))
-            except OSError as e:
-                logger.warning("Cannot list watch directory, skipping: %s (%s)", watch_dir, e)
-                continue
+            paths = sorted(iter_documents(
+                watch_dir, self.config.recursive, self.config.formats,
+                lambda p, e: logger.warning("Skipping unreadable path: %s (%s)", p, e),
+            ))
             for path in paths:
                 try:
-                    if not path.is_file():
-                        continue
-                    if path.suffix.lower() not in self.config.formats:
-                        continue
-
                     # Skip if already processed and unchanged
                     if not self.tracker.needs_processing(path):
                         continue

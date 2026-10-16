@@ -7,7 +7,9 @@ import multiprocessing
 import os
 import random
 import re
+import stat
 import sys
+from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -44,40 +46,54 @@ def convert_windows_path(path_str: str) -> Path:
     return Path(path_str)
 
 
-def find_pdfs(
+def iter_documents(
     directory: Path,
-    recursive: bool = False,
-    quiet: bool = False,
-    shuffle: bool = False,
-) -> list[Path]:
-    """Find all PDF files in directory (case-insensitive).
+    recursive: bool,
+    extensions: set[str],
+    on_skip: Callable[[Path, OSError], None],
+) -> Iterator[Path]:
+    """Yield files under directory whose lowercased suffix is in extensions.
 
-    Args:
-        directory: Directory to search
-        recursive: Search subdirectories
-        quiet: Suppress output
-        shuffle: Randomize file order (useful for learning to avoid sequential bias)
+    Follows symlinked files and directories. Each directory is walked once,
+    keyed by (st_dev, st_ino), so link cycles terminate. Whatever cannot be
+    read (dangling or unmappable link, unlistable directory, file whose stat
+    fails) goes to on_skip
+    and the walk continues; Path.rglob drops these silently and never
+    descends symlinked directories.
     """
-    if not quiet:
-        mode = "recursively " if recursive else ""
-        print(f"Searching {mode}for PDFs in: {directory}", flush=True)
-
-    pdfs = []
-    search = directory.rglob if recursive else directory.glob
-    for pattern in ['*.pdf', '*.PDF', '*.Pdf']:
-        pdfs.extend(search(pattern))
-
-    result = list(set(pdfs))
-
-    if shuffle:
-        random.shuffle(result)
-        if not quiet:
-            print(f"Found {len(result)} PDF file(s) (shuffled for learning)", flush=True)
-    else:
-        if not quiet:
-            print(f"Found {len(result)} PDF file(s)", flush=True)
-
-    return result
+    try:
+        root = os.stat(directory)
+    except OSError as e:
+        on_skip(directory, e)
+        return
+    visited = {(root.st_dev, root.st_ino)}
+    pending = [directory]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as it:
+                entries = list(it)
+        except OSError as e:
+            on_skip(current, e)
+            continue
+        for entry in entries:
+            path = Path(entry.path)
+            wanted = path.suffix.lower() in extensions
+            if not (wanted or recursive):
+                continue
+            try:
+                if not (wanted or entry.is_symlink() or entry.is_dir(follow_symlinks=False)):
+                    continue
+                st = os.stat(entry.path)
+            except OSError as e:
+                on_skip(path, e)
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                if recursive and (st.st_dev, st.st_ino) not in visited:
+                    visited.add((st.st_dev, st.st_ino))
+                    pending.append(path)
+            elif wanted and stat.S_ISREG(st.st_mode):
+                yield path
 
 
 def find_documents(
@@ -103,14 +119,11 @@ def find_documents(
         fmt_list = ', '.join(ext.lstrip('.').upper() for ext in sorted(extensions))
         print(f"Searching {mode}for documents ({fmt_list}) in: {directory}", flush=True)
 
-    docs = []
-    search = directory.rglob if recursive else directory.glob
-    for ext in extensions:
-        bare = ext.lstrip('.')
-        for pattern in [f'*.{bare.lower()}', f'*.{bare.upper()}', f'*.{bare.capitalize()}']:
-            docs.extend(search(pattern))
+    def warn(path: Path, err: OSError) -> None:
+        if not quiet:
+            print(f"Warning: skipping {path}: {err.strerror or err}", file=sys.stderr, flush=True)
 
-    result = list(set(docs))
+    result = list(iter_documents(directory, recursive, extensions, warn))
 
     if shuffle:
         random.shuffle(result)
@@ -2157,11 +2170,24 @@ def main() -> int:
     # Convert and validate path
     path = convert_windows_path(args.path)
 
-    if not path.exists():
+    try:
+        exists = path.exists()
+        single_file = exists and path.is_file()
+        if exists and not single_file:
+            os.scandir(path).close()
+    except OSError as e:
+        try:
+            link = path.is_symlink()
+        except OSError:
+            link = False
+        note = " (symbolic link; target unreadable)" if link else ""
+        print(f"Error: cannot read {path}: {e.strerror or e}{note}", file=sys.stderr)
+        return 1
+
+    if not exists:
         print(f"Error: Path does not exist: {path}", file=sys.stderr)
         return 1
 
-    single_file = path.is_file()
     if single_file and path.suffix.lower() not in SUPPORTED_EXTENSIONS:
         print(f"Error: Unsupported file type: {path.suffix or '(none)'}", file=sys.stderr)
         print(f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)

@@ -4,9 +4,12 @@ New tests organized by FGT test categories:
   INV-*  : Domain invariants that must always hold
   QUAL-* : Output quality verification
   BOUND-*: Edge case / boundary handling
+  INT-*  : End-to-end CLI runs
   PRO-*  : Proactive bug-class detection
 """
 
+import errno
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +23,27 @@ from doc2txt import (
     TextQualityScorer,
     extract_text,
     create_markdown,
+    find_documents,
+    iter_documents,
 )
+
+
+def _walk(root: Path, recursive: bool = True) -> tuple[list[Path], list[Path]]:
+    skipped = []
+    found = list(iter_documents(root, recursive, {".pdf"}, lambda p, e: skipped.append(p)))
+    return sorted(found), skipped
+
+
+def _fail_stat(monkeypatch, bad: Path, err: int, lstat_too: bool = False) -> None:
+    """Make os.stat raise err for bad: when following links, or always if lstat_too."""
+    real_stat = os.stat
+
+    def fake_stat(path, *, dir_fd=None, follow_symlinks=True):
+        if os.fspath(path) == str(bad) and (follow_symlinks or lstat_too):
+            raise OSError(err, os.strerror(err), str(bad))
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
 
 
 class TestInvariants:
@@ -232,6 +255,156 @@ class TestBoundary:
         assert all(isinstance(v, float) for v in vector)
 
 
+    def test_bound_007_recursion_follows_symlinked_subdir(self, tmp_path):
+        """BUG-005: a symlinked subdirectory is descended with -r, not without."""
+        real, other = tmp_path / "real", tmp_path / "other"
+        real.mkdir()
+        other.mkdir()
+        (other / "linked.pdf").touch()
+        (real / "sub_link").symlink_to(other, target_is_directory=True)
+
+        assert find_documents(real, recursive=True, quiet=True) == [real / "sub_link" / "linked.pdf"]
+        assert find_documents(real, recursive=False, quiet=True) == []
+
+    def test_bound_008_symlink_cycle_terminates_each_file_once(self, tmp_path):
+        """BUG-005: sub/loop -> .. ends the walk; each file is found once, from a real or linked root."""
+        real = tmp_path / "real"
+        sub = real / "sub"
+        sub.mkdir(parents=True)
+        (real / "top.pdf").touch()
+        (sub / "deep.pdf").touch()
+        (sub / "loop").symlink_to("..", target_is_directory=True)
+        root_link = tmp_path / "root_link"
+        root_link.symlink_to(real, target_is_directory=True)
+
+        for root in (real, root_link):
+            found = find_documents(root, recursive=True, quiet=True)
+            assert sorted(p.name for p in found) == ["deep.pdf", "top.pdf"]
+
+    def test_bound_009_dangling_link_reported_and_skipped(self, tmp_path):
+        """BUG-005: a dangling link goes to on_skip; the rest of the walk continues."""
+        (tmp_path / "ok.pdf").touch()
+        (tmp_path / "gone.pdf").symlink_to(tmp_path / "missing.pdf")
+
+        found, skipped = _walk(tmp_path)
+        assert found == [tmp_path / "ok.pdf"]
+        assert skipped == [tmp_path / "gone.pdf"]
+
+    def test_bound_010_unreadable_link_target_reported(self, tmp_path, monkeypatch):
+        """BUG-005: EIO following a link (WSL junction to an unmapped volume) goes to on_skip."""
+        (tmp_path / "ok.pdf").touch()
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "hidden.pdf").touch()
+        vault = tmp_path / "vault"
+        vault.symlink_to(target, target_is_directory=True)
+        _fail_stat(monkeypatch, vault, errno.EIO)
+
+        found, skipped = _walk(tmp_path)
+        assert tmp_path / "ok.pdf" in found
+        assert skipped == [vault]
+
+    def test_bound_011_unlistable_subdir_reported_siblings_kept(self, tmp_path, monkeypatch):
+        """BUG-005: scandir EIO on one subdir goes to on_skip; sibling files are still returned."""
+        (tmp_path / "ok.pdf").touch()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "hidden.pdf").touch()
+        real_scandir = os.scandir
+
+        def fake_scandir(path="."):
+            if os.fspath(path) == str(sub):
+                raise OSError(errno.EIO, "Input/output error", str(sub))
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", fake_scandir)
+
+        found, skipped = _walk(tmp_path)
+        assert found == [tmp_path / "ok.pdf"]
+        assert skipped == [sub]
+
+    def test_bound_012_cli_unreadable_link_exits_cleanly(self, tmp_path, monkeypatch, capsys):
+        """BUG-005: a positional link whose target raises EIO exits 1 with a message, not a traceback."""
+        from doc2txt import main
+
+        target = tmp_path / "target"
+        target.mkdir()
+        vault = tmp_path / "Personal Vault"
+        vault.symlink_to(target, target_is_directory=True)
+        _fail_stat(monkeypatch, vault, errno.EIO)
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-r", str(vault)])
+        assert main() == 1
+        err = capsys.readouterr().err
+        assert str(vault) in err
+        assert "target unreadable" in err
+
+    def test_bound_013_cli_dead_mount_exits_cleanly(self, tmp_path, monkeypatch, capsys):
+        """BUG-005: ENODEV on both stat and lstat (unmounted drive) exits 1 with a message."""
+        from doc2txt import main
+
+        dead = tmp_path / "dead_mount"
+        _fail_stat(monkeypatch, dead, errno.ENODEV, lstat_too=True)
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-r", str(dead)])
+        assert main() == 1
+        err = capsys.readouterr().err
+        assert f"cannot read {dead}" in err
+        assert "target unreadable" not in err
+
+    def test_bound_014_cli_unreadable_file_in_tree_skipped(self, tmp_path, monkeypatch, capsys):
+        """BUG-005: EIO on one regular document (stalled cloud file) skips it; -r still exits 0."""
+        from doc2txt import main
+
+        (tmp_path / "ok.docx").touch()
+        stalled = tmp_path / "stalled.pdf"
+        stalled.touch()
+        _fail_stat(monkeypatch, stalled, errno.EIO)
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-n", "--no-ocr", "-j", "1", "-r", str(tmp_path)])
+        assert main() == 0
+        assert f"Warning: skipping {stalled}" in capsys.readouterr().err
+
+    def test_bound_015_cli_unlistable_dir_exits_1(self, tmp_path, monkeypatch, capsys):
+        """BUG-005: a positional directory that cannot be listed exits 1, even with -q."""
+        from doc2txt import main
+
+        real_scandir = os.scandir
+
+        def fake_scandir(path="."):
+            if os.fspath(path) == str(tmp_path):
+                raise OSError(errno.EACCES, "Permission denied", str(tmp_path))
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", fake_scandir)
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-r", str(tmp_path)])
+        assert main() == 1
+        assert f"cannot read {tmp_path}: Permission denied" in capsys.readouterr().err
+
+
+class TestIntegration:
+    """INT-* tests: end-to-end CLI runs."""
+
+    def test_int_001_cli_recursion_through_linked_root_and_subdir(self, tmp_path, monkeypatch):
+        """BUG-005: -r on a linked root converts a document reachable only through a nested link."""
+        import docx
+        from doc2txt import main
+
+        real, other = tmp_path / "real", tmp_path / "other"
+        real.mkdir()
+        other.mkdir()
+        doc = docx.Document()
+        doc.add_paragraph("Reached through two links")
+        doc.save(str(other / "linked.docx"))
+        (real / "sub_link").symlink_to(other, target_is_directory=True)
+        root_link = tmp_path / "root_link"
+        root_link.symlink_to(real, target_is_directory=True)
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-j", "1", "--no-ocr", "-r", str(root_link)])
+        assert main() == 0
+        assert (other / "linked.md").exists()
+
+
 class TestProactive:
     """PRO-* tests: detect structural anti-patterns before they manifest as bugs."""
 
@@ -297,3 +470,18 @@ class TestProactive:
                 f"Found {len(violations)} potential hardcoded extension checks "
                 f"outside SUPPORTED_EXTENSIONS: {violations[:3]}"
             )
+
+    def test_pro_003_discovery_goes_through_iter_documents(self):
+        """BUG-005: no Path.glob/rglob discovery in doc2txt*.py.
+
+        rglob never descends symlinked directories and drops unreadable ones
+        silently; three call sites used it before BUG-005.
+        """
+        project_root = Path(__file__).parent.parent
+        violations = [
+            f"{f.name}:{i}: {line.strip()}"
+            for f in sorted(project_root.glob("doc2txt*.py"))
+            for i, line in enumerate(f.read_text().splitlines(), 1)
+            if "rglob(" in line or ".glob(" in line
+        ]
+        assert not violations, "Use iter_documents():\n" + "\n".join(violations)
