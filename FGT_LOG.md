@@ -141,3 +141,12 @@
 - `grep -q` at the end of a pipe under `pipefail` is racy: the writer can die of SIGPIPE after the match and fail the pipeline
 - `which libreoffice` does not mean Writer formats convert; a Calc-only install exits 0 with no output
 
+### 2026-10-16: Discovery skips Office owner files (BUG-009)
+
+**Change**: `iter_documents()` skips `~$` Office owner (lock) files, so `doc2txt.py -r` no longer reports them as failures, and the watcher scan never lists them. The watcher-only filter added in BUG-007 (`EDITOR_LOCK_PATTERNS` in `is_ready`) became unreachable and was removed. 137 tests.
+
+**Evidence**: On main, `-r` over a folder with `report.docx` and `~$report.docx` printed `FAILED … File is not a zip file` and exited 1. `/mnt/d` holds no owner files today; the 5 the watcher logged are on `/mnt/g`.
+
+**Lessons**:
+- A filter in one consumer of discovery (the watcher's readiness check) protects only that consumer; put "what is a document" in discovery itself
+

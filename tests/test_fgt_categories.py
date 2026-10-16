@@ -520,6 +520,23 @@ class TestBoundary:
             with pytest.raises(SystemExit):
                 doc2txt_watcher.main([*watcher_cli, "--formats", bad])
 
+    def test_bound_019_office_owner_files_not_discovered(self, tmp_path, monkeypatch, capsys):
+        """BUG-009: ~$ Word owner (lock) files are not documents; -r skips them and exits 0."""
+        import docx
+        from doc2txt import main
+
+        docx.Document().save(str(tmp_path / "report.docx"))
+        (tmp_path / "~$report.docx").write_bytes(b"\x0bowner" + b"\0" * 155)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "~$old.doc").write_bytes(b"\0" * 162)
+
+        found = list(iter_documents(tmp_path, True, SUPPORTED_EXTENSIONS, lambda p, e: None))
+        assert found == [tmp_path / "report.docx"]
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-r", "--no-ocr", "-j", "1", str(tmp_path)])
+        assert main() == 0
+        assert "Summary: 1 processed, 0 skipped, 0 failed" in capsys.readouterr().out.splitlines()
+
     def test_bound_018_libreoffice_check_needs_writer(self, monkeypatch):
         """A Calc-only LibreOffice install has `libreoffice` but cannot load .doc/.rtf/.odt."""
         import shutil
