@@ -10,6 +10,7 @@ New tests organized by FGT test categories:
 
 import errno
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -47,6 +48,34 @@ def _fail_stat(monkeypatch, bad: Path, err: int, lstat_too: bool = False) -> Non
         return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(os, "stat", fake_stat)
+
+
+def _scan_pdf(path: Path, sideways: bool = False, text_layer: bool = False) -> Path:
+    """A one-page PDF whose page is an image of the words INVOICE 12345, as a scanner makes it.
+
+    sideways stores the scan rotated and sets /Rotate 90 so it displays upright.
+    text_layer adds the invisible OCR text a scanner lays over the image.
+    Text drawn with PIL's default font OCRs as 123-46, hence pymupdf text rasterized.
+    """
+    import pymupdf
+
+    text = "INVOICE 12345"
+    if sideways:
+        size, origin, rotate = (120, 400), (75, 380), 90
+    else:
+        size, origin, rotate = (400, 120), (20, 75), 0
+    src = pymupdf.open()
+    scan = src.new_page(width=size[0], height=size[1])
+    scan.insert_text(origin, text, fontsize=40, rotate=rotate)
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_image(scan.rect, pixmap=scan.get_pixmap(dpi=150))
+    if text_layer:
+        page.insert_text(origin, text, fontsize=40, rotate=rotate, render_mode=3)
+    if sideways:
+        page.set_rotation(90)
+    doc.save(path)
+    return path
 
 
 class TestInvariants:
@@ -240,6 +269,25 @@ class TestOutputQuality:
         lines = capsys.readouterr().out.splitlines()
         assert f"{'Skipping (already learned)':<26}  a  x.pdf" in lines
         assert f"{'Processing':<26}  b  y.docx" in lines
+
+
+    @pytest.mark.skipif(shutil.which("tesseract") is None, reason="needs the tesseract binary")
+    def test_qual_004_scanned_pdf_text_reaches_markdown(self, tmp_path):
+        """BUG-010: text in a page image reaches the .md exactly once, upright or on /Rotate 90.
+
+        Without a text layer the words come from OCR; with one, OCR of the same words is
+        dropped as a duplicate.
+        """
+        from doc2txt_extractors import process_document
+        from doc2txt_quality import strip_markdown_metadata
+
+        for sideways in (False, True):
+            for text_layer in (False, True):
+                pdf = _scan_pdf(tmp_path / f"scan_{sideways}_{text_layer}.pdf", sideways, text_layer)
+                success, message, _ = process_document(pdf, overwrite=False, dry_run=False, ocr_engine="tesseract")
+                assert (success, message) == (True, f"Created: {pdf.stem}.md")
+                body = strip_markdown_metadata(pdf.with_suffix(".md").read_text())
+                assert body.count("12345") == 1, (sideways, text_layer, body)
 
 
 class TestBoundary:
@@ -540,6 +588,102 @@ class TestBoundary:
         assert check_libreoffice_available() is False
 
 
+    def test_bound_020_ocr_error_fails_document(self, tmp_path, monkeypatch):
+        """BUG-010: an OCR error fails the document instead of leaving a .md without the image's text."""
+        import doc2txt_ocr
+        from doc2txt_extractors import process_document, process_document_worker
+
+        def broken_ocr(*args, **kwargs):
+            raise RuntimeError("ocr broke")
+
+        monkeypatch.setattr(doc2txt_ocr, "check_tesseract_available", lambda: True)
+        monkeypatch.setattr(doc2txt_ocr, "ocr_image_region", broken_ocr)
+        pdf = _scan_pdf(tmp_path / "scan.pdf")
+
+        success, message, _ = process_document(pdf, overwrite=False, dry_run=False, ocr_engine="tesseract")
+        assert (success, message) == (False, "FAILED: scan.pdf - ocr broke")
+        assert not pdf.with_suffix(".md").exists()
+        assert process_document_worker(pdf, False, False, True, "tesseract", False, False).was_failed
+
+    def test_bound_021_zero_area_image_skipped(self, tmp_path, monkeypatch):
+        """BUG-010: an image off the page, or a sliver along its edge, is skipped, not an error.
+
+        Both render to a pixmap with a zero side, and tobytes() raises on that. The page is
+        360 pt tall, a whole number of pixels at 300 dpi, so the sliver renders 0 px high.
+        """
+        import doc2txt_ocr
+        import pymupdf
+        from doc2txt_extractors import process_document
+
+        monkeypatch.setattr(doc2txt_ocr, "check_tesseract_available", lambda: True)
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 200, 200), False)
+        pix.clear_with(0)
+        doc = pymupdf.open()
+        page = doc.new_page(width=400, height=360)
+        page.insert_image(pymupdf.Rect(500, 500, 600, 600), pixmap=pix)
+        page.insert_image(pymupdf.Rect(0, 360 - 0.000122, 400, 460), pixmap=pix)
+        pdf = tmp_path / "edge.pdf"
+        doc.save(pdf)
+
+        assert process_document(pdf, overwrite=False, dry_run=False, ocr_engine="tesseract")[:2] == (True, "Created: edge.md")
+
+
+    def test_bound_022_no_engine_force_ocr_uses_text_layer(self, tmp_path, monkeypatch):
+        """With no OCR engine available, --force-ocr keeps the text layer (the CLI warns OCR is off)."""
+        import doc2txt_ocr
+        import pymupdf
+        from doc2txt_extractors import process_document
+
+        def no_tesseract(*args, **kwargs):
+            raise RuntimeError("Tesseract is not installed")
+
+        for name in ("check_surya_available", "check_paddleocr_available", "check_tesseract_available"):
+            monkeypatch.setattr(doc2txt_ocr, name, lambda: False)
+        monkeypatch.setattr(pymupdf.Page, "get_textpage_ocr", no_tesseract)
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), "Typed text layer")
+        pdf = tmp_path / "typed.pdf"
+        doc.save(pdf)
+
+        assert process_document(pdf, overwrite=False, dry_run=False, force_ocr=True)[:2] == (True, "Created: typed.md")
+        assert "Typed text layer" in pdf.with_suffix(".md").read_text()
+
+
+class TestContract:
+    """CONTRACT-* tests: modules that share a definition agree on it."""
+
+    def test_contract_ocr_engine_resolution(self, tmp_path, monkeypatch):
+        """BUG-010: one engine table decides the OCR engine for the CLI and the watcher."""
+        import doc2txt
+        import doc2txt_ocr
+        import doc2txt_watcher
+        import pymupdf
+
+        for module in (doc2txt_ocr, doc2txt):
+            monkeypatch.setattr(module, "check_surya_available", lambda: False, raising=False)
+            monkeypatch.setattr(module, "check_paddleocr_available", lambda: True, raising=False)
+            monkeypatch.setattr(module, "check_tesseract_available", lambda: True, raising=False)
+        engines = []
+        monkeypatch.setattr(doc2txt, "run_simple", lambda docs, root, args, use_ocr, ocr_engine, *a, **k: engines.append(ocr_engine) or 0)
+        pdf = tmp_path / "x.pdf"
+        doc = pymupdf.open()
+        doc.new_page()
+        doc.save(pdf)
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "-q", "-j", "1", str(pdf)])
+        assert doc2txt.main() == 0
+        assert engines == ["tesseract"]
+
+        monkeypatch.setattr(sys, "argv", ["doc2txt.py", "--ocr-engine", "bogus", str(pdf)])
+        with pytest.raises(SystemExit) as cli_exit:
+            doc2txt.main()
+        with pytest.raises(SystemExit) as watcher_exit:
+            doc2txt_watcher.main(["--watch-dir", str(tmp_path), "--once", "--db-path", str(tmp_path / "w.db"), "--ocr-engine", "bogus"])
+        assert (cli_exit.value.code, watcher_exit.value.code) == (2, 2)
+        with pytest.raises(KeyError):
+            doc2txt_ocr.resolve_ocr_engine("bogus")
+
+
 class TestIntegration:
     """INT-* tests: end-to-end CLI runs."""
 
@@ -615,49 +759,6 @@ class TestProactive:
         assert not violations, (
             "Module size violations:\n" + "\n".join(violations)
         )
-
-    def test_pro_002_no_hardcoded_extensions_outside_registry(self):
-        """Extension strings should only appear in SUPPORTED_EXTENSIONS definition.
-
-        Detects hardcoded format checks that bypass the central registry.
-        """
-        project_root = Path(__file__).parent.parent
-
-        # Find all lines with hardcoded extension checks outside the registry
-        violations = []
-        for py_file in sorted(project_root.glob("doc2txt*.py")):
-            source = py_file.read_text()
-            for i, line in enumerate(source.splitlines(), 1):
-                # Skip the SUPPORTED_EXTENSIONS definition itself
-                if "SUPPORTED_EXTENSIONS" in line:
-                    continue
-                # Skip comments and strings in format dispatch (the switch-case is OK)
-                if line.strip().startswith("#"):
-                    continue
-                # Look for extension equality checks like == '.pdf' or in ('.doc',
-                for ext in ['.pdf', '.docx', '.doc', '.rtf', '.odt']:
-                    if f"== '{ext}'" in line or f'== "{ext}"' in line:
-                        # Allow in extract_text dispatcher (the legitimate dispatch)
-                        if "def extract_text" not in source.splitlines()[max(0, i-5):i]:
-                            # Check if we're inside extract_text function body
-                            # (rough heuristic: within 20 lines of "def extract_text")
-                            context_start = max(0, i - 20)
-                            context = source.splitlines()[context_start:i]
-                            if any("def extract_text(" in cl for cl in context):
-                                continue
-                            if any("def find_documents(" in cl for cl in context):
-                                continue
-                            violations.append(f"{py_file.name}:{i}: {line.strip()}")
-
-        # This is advisory — violations may be legitimate dispatch logic
-        # Only fail if there are clearly wrong hardcoded checks
-        # For now, just ensure the test runs and documents any findings
-        if violations:
-            import warnings
-            warnings.warn(
-                f"Found {len(violations)} potential hardcoded extension checks "
-                f"outside SUPPORTED_EXTENSIONS: {violations[:3]}"
-            )
 
     def test_pro_003_discovery_goes_through_iter_documents(self):
         """BUG-005: no Path.glob/rglob discovery in doc2txt*.py.

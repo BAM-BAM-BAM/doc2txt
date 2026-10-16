@@ -13,7 +13,7 @@ Bug catalog for escaped bugs. Each entry links to the prevention principle it vi
 | **Root Cause** | pymupdf's `get_text("blocks")` gives false positives for pages with embedded fonts — reports text blocks exist but extracted text is empty or gibberish |
 | **Fix** | Removed heuristic after 7 iterations. Simplified to: always OCR images, extract text from text layers. Simpler approach is more robust. |
 | **Principle Violated** | #4 (Invariants Must Be Tested) — heuristic was never validated against ground truth corpus |
-| **Prevention Test** | QUAL-001: extraction of known scanned PDF produces non-empty, readable text |
+| **Prevention Test** | `test_qual_004` (BUG-010): a scanned page's text reaches the `.md` exactly once, upright or on `/Rotate 90`. (This row named QUAL-001 until 2026-10-16, but QUAL-001 extracts a DOCX; no test ran OCR.) |
 | **Siblings** | Any PDF classification heuristic relying on pymupdf text block detection |
 | **Data Revalidation** | N/A — no stored data, output regenerated on each run |
 
@@ -163,3 +163,21 @@ parse and the validation live in a function both import.
 | **Data Revalidation** | 2026-10-16: the `/mnt/d` watch dir has 0 `~$` files and 0 `~$*.md` outputs (`find`); `watcher.db` has 0 `~$` rows. `/mnt/g` (the 5 logged owner files) is unmounted; owner files never converted, so they left no output. |
 
 **Pattern:** Decide what a document is in the one place that discovers documents.
+
+---
+
+### BUG-010: Image OCR failed silently, so PDFs with images were stored as converted without their image text
+
+| Field | Value |
+|-------|-------|
+| **Symptom** | 5,071 `.md` outputs from PDFs with images (1,507 by the watcher, 3,564 by earlier CLI runs; 41,569 pages with images) lack the text inside those images. 854 of them are empty: their PDFs have no text layer. Each was logged `Created:`; the watcher recorded it as done and never retried it. |
+| **Root Cause** | (1) Tesseract region OCR passed `clip=` to `page.get_textpage_ocr`, which pymupdf 1.27.2.3 and 1.26.7 both reject with TypeError. (2) PaddlePaddle 3.3 fails on this CPU: NotImplementedError (oneDNN), MemoryError with oneDNN off. (3) `extract_page_hybrid` caught each image's exception and printed it only with `debug=True`, which nothing passed; `extract_page_text` fell back to the text layer. (4) The engine was chosen in four places: `resolve_ocr_engine` had no `"auto"` key (the watcher's default fell to Tesseract by accident), `main()` had its own surya → paddle → tesseract chain (under `.venv` the CLI picked the broken paddle), the CLI's `choices`, and a watcher flag that accepted any string. |
+| **Fix** | `ocr_image_region` OCRs the rendered region pixmap with `pix.pdfocr_tobytes`; renders with `Rect(bbox) * page.rotation_matrix` (image rects are unrotated, `get_pixmap` clips in rotated space); skips a pixmap under 20×10 before `tobytes`, which raises on a zero side (images off the page, or a sliver along its edge); drops OCR text when 80% or more of its words are already text-layer words inside the region (scanned PDFs carry an invisible OCR layer). `OCR_FALLBACKS` is the one engine table: `auto`/`surya` try surya then tesseract, `paddle` only paddle; `resolve_ocr_engine` indexes it (unknown name: KeyError), `main()` calls it once, both parsers use its keys, library defaults are `auto`. The catch-alls are gone: an OCR error now reaches `process_document`'s handler, which returns `FAILED:` and writes no `.md`, so the watcher logs `ERROR Failed:` and retries. The dead image-block branch of `extract_page_hybrid` is removed. |
+| **Principle Violated** | #9 (Defenses Must Be Operational) — every OCR error was swallowed, and the test BUG-001 named as its scanned-PDF guard extracted a DOCX. #3 (Single Source of Truth) — four engine chains disagreed. |
+| **Prevention Test** | test_fgt_categories.py: `test_qual_004` (scanned page, with and without an invisible text layer, upright and `/Rotate 90`: the text appears exactly once; needs the tesseract binary, so it runs at the local pre-commit, not in CI), `test_bound_020` (an OCR error gives `FAILED:`, no `.md`, and `was_failed` from the worker), `test_bound_021` (an image off the page and an edge sliver give `Created:`), `test_bound_022` (with no engine, `--force-ocr` keeps the text layer instead of failing), `test_contract_ocr_engine_resolution` (with only paddle and tesseract available the CLI default sends `tesseract`; both parsers reject `bogus`; `resolve_ocr_engine("bogus")` raises). `scripts/sweep.sh` runs `scripts/ocr_canary.py` once a day under the cron's interpreter and environment. |
+| **Siblings** | 36 PDFs have images that `get_images` does not list (inline or nested); 35 of their outputs have 100+ characters, not changed. 17 one-page PDFs hold 61–609 words drawn as vector outlines, which no image path reaches (BACKLOG). 3 documents have image regions over 50 Mpx; the watcher has no time limit for them (BACKLOG). |
+| **Data Revalidation** | Planned after merge: a resumable job in `~/.doc2txt/revalidate-ocr-2026-10-16/` regenerates the 5,071 outputs, empty ones first, with atomic writes and one backup per replaced file; it keeps outputs that already hold OCR text (`had-ocr`) or would shrink (`kept-old`) and skips PDFs sharing a stem with a DOCX/DOC/RTF/ODT. `scripts/sweep.sh` reports its progress until it finishes. `/mnt/g` (unmounted) and CLI outputs outside the watch folders are in BACKLOG. |
+
+**Pattern:** An error handler that turns a failure into an empty result needs a test
+that the result is not empty. Here every image's OCR error became "no text", and a
+document with no text was a valid output, so nothing looked wrong for five months.

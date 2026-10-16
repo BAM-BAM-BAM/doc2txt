@@ -1,6 +1,7 @@
 """OCR engines (Tesseract, PaddleOCR, Surya), GPU management, and per-page PDF text extraction."""
 
 import os
+import re
 
 from doc2txt_models import ImageFeature
 from doc2txt_learning import AdaptiveLearner
@@ -32,11 +33,22 @@ def check_surya_available() -> bool:
         return False
 
 
+# Engines tried, in order, for each name the CLI and the watcher accept. PaddleOCR runs
+# only when named: PaddlePaddle 3.3 on this CPU raises NotImplementedError (oneDNN), and
+# MemoryError with oneDNN off, so it must never be picked as a fallback.
+OCR_FALLBACKS = {
+    "auto": ["surya", "tesseract"],
+    "surya": ["surya", "tesseract"],
+    "paddle": ["paddle"],
+    "tesseract": ["tesseract"],
+}
+
+
 def resolve_ocr_engine(requested: str, use_ocr: bool = True) -> tuple[bool, str, list[str]]:
     """Resolve which OCR engine to use with fallback chain.
 
     Args:
-        requested: Requested OCR engine ("surya", "paddle", "tesseract", "none")
+        requested: A key of OCR_FALLBACKS, or "none"
         use_ocr: Whether OCR is enabled
 
     Returns:
@@ -47,14 +59,7 @@ def resolve_ocr_engine(requested: str, use_ocr: bool = True) -> tuple[bool, str,
     if not use_ocr or requested == "none":
         return False, "none", ["OCR: disabled"]
 
-    # Try requested engine first, then fallbacks
-    fallback_order = {
-        "surya": ["surya", "paddle", "tesseract"],
-        "paddle": ["paddle", "tesseract"],
-        "tesseract": ["tesseract"],
-    }
-
-    engines = fallback_order.get(requested, ["tesseract"])
+    engines = OCR_FALLBACKS[requested]
     checks = {
         "surya": check_surya_available,
         "paddle": check_paddleocr_available,
@@ -526,19 +531,21 @@ def ocr_image_region(
     import io
     from PIL import Image
 
-    # Create a clip rect for the region
     import pymupdf
-    clip = pymupdf.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+    region = pymupdf.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
 
-    # Render just this region at the specified DPI
+    # Render just this region at the specified DPI. Image rects are in unrotated page
+    # space; get_pixmap clips in rotated space.
     mat = pymupdf.Matrix(dpi / 72, dpi / 72)
-    pix = page.get_pixmap(matrix=mat, clip=clip)
-    img_data = pix.tobytes("png")
-    img = Image.open(io.BytesIO(img_data))
+    pix = page.get_pixmap(matrix=mat, clip=region * page.rotation_matrix)
 
-    # Skip tiny images (likely decorative)
-    if img.width < 20 or img.height < 10:
+    # Skip tiny images (likely decorative). This also skips a region with no area on the
+    # page (off the page, or a sliver along its edge), whose zero-sized pixmap would make
+    # tobytes() raise.
+    if pix.width < 20 or pix.height < 10:
         return "", False
+
+    img = Image.open(io.BytesIO(pix.tobytes("png")))
 
     # Extract features for learning
     features = None
@@ -582,14 +589,32 @@ def ocr_image_region(
             text = '\n'.join(lines)
 
     else:  # tesseract
-        tp = page.get_textpage_ocr(full=True, language="eng", clip=clip)
-        text = page.get_text(textpage=tp, clip=clip).strip()
+        ocr_pdf = pymupdf.open("pdf", pix.pdfocr_tobytes(language="eng"))
+        text = ocr_pdf[0].get_text().strip()
+
+    if _repeats_text_layer(text, page, region):
+        text = ""
 
     # Record outcome for learning
     if learner and features:
         learner.record_outcome(features, pdf_path, page_num, image_index, True, text, is_exploration, ocr_reason)
 
     return text, True
+
+
+def _repeats_text_layer(ocr_text: str, page, region) -> bool:
+    """True when most OCR words already sit in the page's text layer inside region.
+
+    Scanned PDFs often carry an invisible OCR text layer over the page image, so OCRing
+    the image again would print its words twice. Text-layer words are in unrotated page
+    space, like region.
+    """
+    ocr_words = [w for w in re.findall(r"[a-z0-9]+", ocr_text.lower()) if len(w) >= 2]
+    if not ocr_words:
+        return False
+    layer_text = " ".join(w[4] for w in page.get_text("words", clip=region)).lower()
+    layer_words = set(re.findall(r"[a-z0-9]+", layer_text))
+    return sum(w in layer_words for w in ocr_words) >= 0.8 * len(ocr_words)
 
 
 def extract_page_hybrid(
@@ -615,14 +640,10 @@ def extract_page_hybrid(
     Returns:
         Tuple of (extracted_text, ocr_regions_count, ocr_chars_count, skipped_count)
     """
-    import pymupdf
-
-    # Get all blocks with positions
-    # Block format: (x0, y0, x1, y1, text_or_img, block_no, block_type)
-    # block_type: 0=text, 1=image
+    # Text blocks with positions: (x0, y0, x1, y1, text, block_no, block_type).
+    # Without TEXT_PRESERVE_IMAGES there are no image blocks; images come from get_images().
     blocks = page.get_text("blocks")
 
-    # Separate text and image blocks
     content_blocks = []  # (y0, text, is_ocr)
 
     ocr_regions = 0
@@ -630,94 +651,52 @@ def extract_page_hybrid(
     skipped_regions = 0
     image_index = 0
 
-    # Track which areas we've processed as image blocks
     processed_rects = []
 
     for block in blocks:
         x0, y0, x1, y1, content, block_no, block_type = block
+        text = content.strip()
+        if text:
+            content_blocks.append((y0, text, False))
 
-        if block_type == 0:
-            # Text block - use as-is
-            text = content.strip()
-            if text:
-                content_blocks.append((y0, text, False))
-        else:
-            # Image block - OCR this region (learner may skip)
-            processed_rects.append(pymupdf.Rect(x0, y0, x1, y1))
-            try:
-                img_text, was_ocrd = ocr_image_region(
-                    page,
-                    (x0, y0, x1, y1),
-                    ocr_engine,
-                    dpi,
-                    learner=learner,
-                    pdf_path=pdf_path,
-                    page_num=page_num,
-                    image_index=image_index,
-                    text_blocks=blocks,
-                )
-                image_index += 1
-
-                if not was_ocrd:
-                    skipped_regions += 1
-                    if debug:
-                        print(f"    [DEBUG] Skipped image block at y={y0:.0f} (learning)")
-                elif img_text and img_text.strip():
-                    content_blocks.append((y0, img_text.strip(), True))
-                    ocr_regions += 1
-                    ocr_chars += len(img_text)
-                    if debug:
-                        print(f"    [DEBUG] OCR'd image block at y={y0:.0f}: {len(img_text)} chars")
-            except Exception as e:
-                if debug:
-                    print(f"    [DEBUG] Failed to OCR image at y={y0:.0f}: {e}")
-
-    # Also check for images via get_images() that weren't detected as blocks
-    # This catches images that PyMuPDF doesn't return as block_type=1
     for img_info in page.get_images(full=True):
         xref = img_info[0]
-        try:
-            # Get bounding box(es) for this image on the page
-            img_rects = page.get_image_rects(xref)
-            for rect in img_rects:
-                # Skip if we already processed this area as an image block
-                already_processed = any(
-                    rect.intersects(pr) and rect.get_area() > 0 and
-                    abs(rect.get_area() - pr.get_area()) / max(rect.get_area(), 1) < 0.5
-                    for pr in processed_rects
-                )
-                if already_processed:
-                    continue
+        for rect in page.get_image_rects(xref):
+            # Skip an area already OCR'd (the same image placed twice)
+            already_processed = any(
+                rect.intersects(pr) and rect.get_area() > 0 and
+                abs(rect.get_area() - pr.get_area()) / max(rect.get_area(), 1) < 0.5
+                for pr in processed_rects
+            )
+            if already_processed:
+                continue
 
-                x0, y0, x1, y1 = rect
-                processed_rects.append(rect)
+            x0, y0, x1, y1 = rect
+            processed_rects.append(rect)
 
-                img_text, was_ocrd = ocr_image_region(
-                    page,
-                    (x0, y0, x1, y1),
-                    ocr_engine,
-                    dpi,
-                    learner=learner,
-                    pdf_path=pdf_path,
-                    page_num=page_num,
-                    image_index=image_index,
-                    text_blocks=blocks,
-                )
-                image_index += 1
+            img_text, was_ocrd = ocr_image_region(
+                page,
+                (x0, y0, x1, y1),
+                ocr_engine,
+                dpi,
+                learner=learner,
+                pdf_path=pdf_path,
+                page_num=page_num,
+                image_index=image_index,
+                text_blocks=blocks,
+            )
+            image_index += 1
 
-                if not was_ocrd:
-                    skipped_regions += 1
-                    if debug:
-                        print(f"    [DEBUG] Skipped image (xref={xref}) at y={y0:.0f} (learning)")
-                elif img_text and img_text.strip():
-                    content_blocks.append((y0, img_text.strip(), True))
-                    ocr_regions += 1
-                    ocr_chars += len(img_text)
-                    if debug:
-                        print(f"    [DEBUG] OCR'd image (xref={xref}) at y={y0:.0f}: {len(img_text)} chars")
-        except Exception as e:
-            if debug:
-                print(f"    [DEBUG] Failed to process image xref={xref}: {e}")
+            if not was_ocrd:
+                skipped_regions += 1
+                if debug:
+                    print(f"    [DEBUG] Skipped image (xref={xref}) at y={y0:.0f} (learning)")
+            elif img_text and img_text.strip():
+                content_blocks.append((y0, img_text.strip(), True))
+                ocr_regions += 1
+                ocr_chars += len(img_text)
+                if debug:
+                    print(f"    [DEBUG] OCR'd image (xref={xref}) at y={y0:.0f}: {len(img_text)} chars")
 
     # Sort by y-position (reading order: top to bottom)
     content_blocks.sort(key=lambda x: x[0])
@@ -746,7 +725,9 @@ def extract_page_text(
 
     Args:
         page: PyMuPDF page object
-        ocr_engine: OCR engine to use ("surya", "paddle", "tesseract", "none")
+        ocr_engine: Resolved OCR engine ("surya", "paddle", "tesseract", or "none");
+            see resolve_ocr_engine. OCR errors propagate: a document whose image
+            cannot be OCR'd fails rather than losing that image's text.
         force_ocr: Force full-page OCR regardless of content
         suppress_output: Suppress stdout/stderr during processing
         learner: Optional AdaptiveLearner for image skip decisions
@@ -756,57 +737,50 @@ def extract_page_text(
     Returns:
         Tuple of (text, used_ocr, ocr_chars, log_message)
     """
-    if ocr_engine == "none" and not force_ocr:
+    if ocr_engine == "none":
         with SuppressOutputFD(suppress=suppress_output):
             text = page.get_text().strip()
         return text, False, 0, ""
 
     has_images = len(page.get_images(full=False)) > 0
 
-    try:
-        if force_ocr:
-            # Full page OCR: user wants everything re-OCR'd
-            with SuppressOutputFD(suppress=suppress_output):
-                if ocr_engine == "surya":
-                    ocr_text = ocr_page_with_surya(page)
-                elif ocr_engine == "paddle":
-                    ocr_text = ocr_page_with_paddle(page)
-                else:  # tesseract
-                    tp = page.get_textpage_ocr(full=True, language="eng")
-                    ocr_text = page.get_text(textpage=tp).strip()
-            return ocr_text, True, len(ocr_text), f"OCR +{len(ocr_text):,} chars ({ocr_engine})"
+    if force_ocr:
+        # Full page OCR: user wants everything re-OCR'd
+        with SuppressOutputFD(suppress=suppress_output):
+            if ocr_engine == "surya":
+                ocr_text = ocr_page_with_surya(page)
+            elif ocr_engine == "paddle":
+                ocr_text = ocr_page_with_paddle(page)
+            else:  # tesseract
+                tp = page.get_textpage_ocr(full=True, language="eng")
+                ocr_text = page.get_text(textpage=tp).strip()
+        return ocr_text, True, len(ocr_text), f"OCR +{len(ocr_text):,} chars ({ocr_engine})"
 
-        elif has_images:
-            # Hybrid: always extract text + OCR every image, merge by position
-            with SuppressOutputFD(suppress=suppress_output):
-                hybrid_text, ocr_regions, ocr_chars, skipped = extract_page_hybrid(
-                    page,
-                    ocr_engine=ocr_engine,
-                    learner=learner,
-                    pdf_path=pdf_path,
-                    page_num=page_num,
-                )
-            if ocr_regions > 0 or skipped > 0:
-                msg_parts = []
-                if ocr_regions > 0:
-                    msg_parts.append(f"+{ocr_regions} imgs (+{ocr_chars:,} chars)")
-                if skipped > 0:
-                    msg_parts.append(f"skipped {skipped}")
-                return hybrid_text, ocr_regions > 0, ocr_chars, ", ".join(msg_parts)
-            else:
-                return hybrid_text, False, 0, ""
-
+    elif has_images:
+        # Hybrid: always extract text + OCR every image, merge by position
+        with SuppressOutputFD(suppress=suppress_output):
+            hybrid_text, ocr_regions, ocr_chars, skipped = extract_page_hybrid(
+                page,
+                ocr_engine=ocr_engine,
+                learner=learner,
+                pdf_path=pdf_path,
+                page_num=page_num,
+            )
+        if ocr_regions > 0 or skipped > 0:
+            msg_parts = []
+            if ocr_regions > 0:
+                msg_parts.append(f"+{ocr_regions} imgs (+{ocr_chars:,} chars)")
+            if skipped > 0:
+                msg_parts.append(f"skipped {skipped}")
+            return hybrid_text, ocr_regions > 0, ocr_chars, ", ".join(msg_parts)
         else:
-            # No images, just extract text
-            with SuppressOutputFD(suppress=suppress_output):
-                text = page.get_text().strip()
-            return text, False, 0, ""
+            return hybrid_text, False, 0, ""
 
-    except Exception as e:
-        # Fallback to basic extraction on error
+    else:
+        # No images, just extract text
         with SuppressOutputFD(suppress=suppress_output):
             text = page.get_text().strip()
-        return text, False, 0, f"FAILED - {e}"
+        return text, False, 0, ""
 
 
 class SuppressOutputFD:

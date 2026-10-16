@@ -144,7 +144,7 @@ def check_libreoffice_available() -> bool:
 def extract_text_from_pdf(
     pdf_path: Path,
     use_ocr: bool = True,
-    ocr_engine: str = "paddle",
+    ocr_engine: str = "auto",
     force_ocr: bool = False,
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None,
@@ -365,7 +365,7 @@ def extract_text_via_libreoffice(
 def extract_text(
     source_path: Path,
     use_ocr: bool = True,
-    ocr_engine: str = "paddle",
+    ocr_engine: str = "auto",
     force_ocr: bool = False,
     stats: ProcessingStats | None = None,
     hud: RetroHUD | None = None,
@@ -411,7 +411,7 @@ def process_document(
     overwrite: bool,
     dry_run: bool,
     use_ocr: bool = True,
-    ocr_engine: str = "paddle",
+    ocr_engine: str = "auto",
     force_ocr: bool = False,
     improve: bool = False,
     stats: ProcessingStats | None = None,

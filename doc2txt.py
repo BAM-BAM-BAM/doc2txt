@@ -21,11 +21,13 @@ from doc2txt_models import (
 from doc2txt_learning import AdaptiveLearner
 from doc2txt_hud import RetroHUD
 from doc2txt_ocr import (
+    OCR_FALLBACKS,
     check_tesseract_available,
     check_paddleocr_available,
     check_surya_available,
     print_gpu_debug_info,
     configure_surya_batch_sizes,
+    resolve_ocr_engine,
 )
 from doc2txt_extractors import (
     find_documents,
@@ -680,9 +682,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--ocr-engine",
-        choices=["paddle", "surya", "tesseract"],
+        choices=sorted(OCR_FALLBACKS),
         default="surya",
-        help="OCR engine to use (default: surya). Note: PaddleOCR v3.3 has a known bug, use surya or tesseract instead."
+        help="OCR engine (default: surya, falling back to tesseract; auto is the same). "
+             "paddle runs only when named: PaddlePaddle 3.3 fails on CPU here."
     )
     parser.add_argument(
         "--debug",
@@ -882,7 +885,7 @@ def main() -> int:
         print(f"  Tesseract: {check_tesseract_available()}")
         print(f"  Requested: {args.ocr_engine}")
         # Pre-configure and show Surya batch sizes if using surya
-        if args.ocr_engine == "surya" and check_surya_available():
+        if args.ocr_engine in ("surya", "auto") and check_surya_available():
             configure_surya_batch_sizes()
             rec_batch = os.environ.get('RECOGNITION_BATCH_SIZE', '512 (default)')
             det_batch = os.environ.get('DETECTOR_BATCH_SIZE', 'default')
@@ -890,22 +893,12 @@ def main() -> int:
         print()
 
     if use_ocr:
-        # Check if requested engine is available, with fallback
-        if ocr_engine == "surya" and not check_surya_available():
-            if not args.quiet:
-                print("Warning: Surya not available, trying PaddleOCR...", file=sys.stderr)
-            ocr_engine = "paddle"
-
-        if ocr_engine == "paddle" and not check_paddleocr_available():
-            if not args.quiet:
-                print("Warning: PaddleOCR not available, trying Tesseract...", file=sys.stderr)
-            ocr_engine = "tesseract"
-
-        if ocr_engine == "tesseract" and not check_tesseract_available():
-            if not args.quiet:
-                print("Warning: No OCR engine available. OCR disabled.", file=sys.stderr)
-                print("Install with: pip install paddleocr paddlepaddle", file=sys.stderr)
-            use_ocr = False
+        use_ocr, ocr_engine, _ = resolve_ocr_engine(args.ocr_engine)
+        if not args.quiet:
+            if not use_ocr:
+                print(f"Warning: no OCR engine available for --ocr-engine {args.ocr_engine}; OCR disabled.", file=sys.stderr)
+            elif args.ocr_engine not in ("auto", ocr_engine):
+                print(f"Warning: {args.ocr_engine} not available, using {ocr_engine}.", file=sys.stderr)
 
     # Find documents
     # Determine shuffle: default ON with --learn, unless --no-learn-shuffle

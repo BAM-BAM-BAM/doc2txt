@@ -11,8 +11,8 @@ It supplements the generic FGT methodology defined in [FGT.md](FGT.md).
 |------|-----------|
 | OCR | Optical Character Recognition -- converting images of text to actual text |
 | pymupdf | Python library (fitz) for PDF manipulation and text extraction |
-| Surya | GPU-accelerated OCR engine for high-accuracy text recognition |
-| PaddleOCR | Alternative OCR engine with good multi-language support |
+| Surya | GPU-accelerated OCR engine; optional, not installed on this machine (`auto` and `surya` fall back to Tesseract) |
+| PaddleOCR | OCR engine used only when named (`--ocr-engine paddle`); fails on this CPU (PaddlePaddle 3.3) |
 | VRAM | Video RAM -- GPU memory used by OCR models |
 | Feature vector | Numeric representation of image characteristics for ML-based OCR decisions (14 elements) |
 | Quality score | 0.0-1.0 metric combining word ratio, content score, and gibberish penalty |
@@ -95,7 +95,8 @@ storage format. Validate at ingestion. Convert only at display.
 
 ### PDF-Specific
 - Handle embedded fonts correctly
-- OCR fallback for scanned/image-based pages
+- OCR fallback for scanned/image-based pages: each image region is OCR'd and merged with the text layer by position
+- An OCR error fails the document; it must never degrade to a text-layer-only output
 - Adaptive learning for OCR optimization
 
 ### DOCX-Specific
@@ -131,6 +132,12 @@ storage format. Validate at ingestion. Convert only at display.
 | Calc-only LibreOffice (BUG-007) | DOC/RTF/ODT | `libreoffice` exits 0 and writes nothing for a Writer document | Check for `lowriter`; treat "no output" as a failure |
 | Failure stored as done (BUG-007) | All | A failed conversion is marked processed, so the watcher never retries it | Mark a document only when it was converted or deliberately skipped |
 | Office owner file (BUG-009) | DOCX/DOC | `~$name.docx` (about 162 bytes) has the document's extension and is not a document | Skip `OFFICE_OWNER_PREFIX` names in discovery |
+| OCR errors swallowed (BUG-010) | PDF | Scanned pages convert to `Created:` with an empty body; 5,071 outputs lacked their image text for 5 months | Let OCR errors fail the document; `test_qual_004` OCRs a real scanned page; the sweep runs an OCR canary under the cron's interpreter |
+| Duplicate OCR text (BUG-010) | PDF | A scanned PDF's invisible OCR layer plus OCR of its image prints every word twice | Drop region OCR whose words are 80%+ already in the text layer inside the region |
+| Rotated pages (BUG-010) | PDF | On a `/Rotate` page, image rects are unrotated but `get_pixmap` clips in rotated space, so the wrong region is OCR'd | Render with `rect * page.rotation_matrix`; compare text-layer words with the unrotated rect |
+| Zero-area images (BUG-010) | PDF | An image off the page, or a sliver along its edge, renders to a pixmap with a zero side and `tobytes()` raises `FzErrorArgument` (1.6% of sampled image PDFs) | Check the pixmap's size before `tobytes()` |
+| PaddlePaddle 3.3 on CPU (BUG-010) | PDF (OCR) | NotImplementedError (oneDNN); with `enable_mkldnn=False`, MemoryError | Never a fallback; used only when named |
+| Vector-only PDFs | PDF | One-page PDFs with no fonts and only drawings give an empty output: correct for 825 of 842 measured; 17 hold 61–609 words drawn as outlines | Empty output is not by itself a defect; the 17 need full-page OCR (BACKLOG) |
 
 ---
 

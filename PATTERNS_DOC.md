@@ -82,14 +82,18 @@ corrupted file shouldn't block the rest.
 
 ## OCR Fallback Pattern
 
-OCR is inherently fragile. Multiple engines with graceful degradation:
+`OCR_FALLBACKS` (doc2txt_ocr.py) is the one table of engines tried for each
+`--ocr-engine` name; the CLI and the watcher both resolve through it:
 
-```
-Primary: Surya (GPU-accelerated, highest accuracy)
-  -> Fallback: PaddleOCR (alternative GPU engine)
-       -> Fallback: CPU mode (--cpu flag)
-            -> Fallback: Skip OCR (text-only extraction)
-```
+| Name | Tried in order |
+|------|----------------|
+| `auto`, `surya` | surya, tesseract |
+| `paddle` | paddle (only when named) |
+| `tesseract` | tesseract |
+
+- No engine available: OCR is disabled with a warning, and the text layer is used.
+- An engine that is available but raises fails the document (`FAILED:`, no `.md`).
+  It never degrades to a text-layer-only output (BUG-010).
 
 **GPU memory management:**
 - Check available VRAM before loading models
@@ -129,11 +133,11 @@ When extraction logic changes, update fixtures deliberately (not silently).
 
 ### Proactive Detection (PRO-*)
 
-```python
-def test_pro_no_hardcoded_extensions():
-    """No extension strings outside SUPPORTED_EXTENSIONS."""
-    # Scan source for '.pdf', '.docx' etc. outside the constant definition
-```
+A PRO test scans the source of every `doc2txt*.py` module for a structural
+anti-pattern and must be able to fail: `test_pro_001` (module size, see Module
+Size Enforcement below), `test_pro_003` (discovery only through
+`iter_documents`), `test_pro_004` (no substring status checks). A scan that can
+only warn is not a defense; PRO-002 did that and was removed (BUG-010 PR).
 
 ---
 
@@ -143,11 +147,11 @@ Flat modules, one concern each (lines as of 2026-10-16):
 
 | Module | Lines | Holds |
 |--------|-------|-------|
-| `doc2txt.py` | 996 | CLI: argument parsing, progress lines, result counting, the four runners, `main` |
+| `doc2txt.py` | 989 | CLI: argument parsing, progress lines, result counting, the four runners, `main` |
 | `doc2txt_learning.py` | 974 | `AdaptiveLearner` (OCR skip decisions) |
-| `doc2txt_ocr.py` | 845 | OCR engines, GPU management, per-page PDF extraction |
+| `doc2txt_ocr.py` | 819 | OCR engines, GPU management, per-page PDF extraction |
 | `doc2txt_extractors.py` | 636 | Discovery, status labels, per-format extractors, `process_document` and its worker |
-| `doc2txt_watcher.py` | 488 | Nightly folder watcher |
+| `doc2txt_watcher.py` | 490 | Nightly folder watcher |
 | `doc2txt_hud.py` | 274 | Curses progress display |
 | `doc2txt_models.py` | 192 | Data models, `SUPPORTED_EXTENSIONS`, `parse_formats` |
 | `doc2txt_quality.py` | 130 | Text quality scoring |
