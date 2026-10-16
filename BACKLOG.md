@@ -29,7 +29,7 @@ If it's not in this file, it doesn't exist.
 
 ### Backlog cleanup (2026-10-16)
 - [x] `FileReadinessChecker.is_ready`'s `CLOUD_SYNC_TEMP_PATTERNS` check could not match anything `scan_once` passes it -- deleted with `_matches_pattern` and `test_bound_temp_file_not_ready`; `test_int_scan_finds_ready_files` already asserts a non-document name is never scanned
-- [x] fgt-config template `fgt_stop_check.sh.tmpl:54` and lang-app's copy ended `changed_in_session` with `grep -qE` under `pipefail` -- fixed in fgt-config #57 (merged: template, `examples/demo-py`, a `test-new-project.sh` assertion) and lang-app #3 (open: lang-app main has no branch protection, so the owner merges it; `scripts/sweep.sh` WARNs until lang-app's checked-out hook is fixed). The five older project copies and two `fgt-sync.sh` pipelines are tracked in fgt-config's BACKLOG
+- [x] fgt-config template `fgt_stop_check.sh.tmpl:54` and lang-app's copy ended `changed_in_session` with `grep -qE` under `pipefail` -- fixed in fgt-config #57 (merged: template, `examples/demo-py`, a `test-new-project.sh` assertion) and lang-app #3 (merged by the owner, 7982c3e; the sweep check that tracked it was removed once it passed). The five older project copies and two `fgt-sync.sh` pipelines are tracked in fgt-config's BACKLOG
 - [x] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- BUG-004, 005, 007 and 009 lessons added (bug patterns, constants, LibreOffice Writer); Bug Abstraction step 7 in CLAUDE.md now names FGT_DOMAIN_DOC.md, so each future bug fix carries this forward
 
 ### CLI (2026-10-16, BUG-009)
