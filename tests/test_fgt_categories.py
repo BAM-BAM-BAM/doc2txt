@@ -17,16 +17,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from doc2txt import (
-    SUPPORTED_EXTENSIONS,
-    ImageFeature,
-    TextQualityScorer,
-    extract_text,
-    create_markdown,
-    find_documents,
-    iter_documents,
-    progress_formatter,
-)
+from doc2txt import progress_formatter
+from doc2txt_extractors import create_markdown, extract_text, find_documents, iter_documents
+from doc2txt_models import SUPPORTED_EXTENSIONS, ImageFeature
+from doc2txt_quality import TextQualityScorer
 
 
 def _walk(root: Path, recursive: bool = True) -> tuple[list[Path], list[Path]]:
@@ -540,7 +534,7 @@ class TestBoundary:
     def test_bound_018_libreoffice_check_needs_writer(self, monkeypatch):
         """A Calc-only LibreOffice install has `libreoffice` but cannot load .doc/.rtf/.odt."""
         import shutil
-        from doc2txt import check_libreoffice_available
+        from doc2txt_extractors import check_libreoffice_available
 
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/libreoffice" if name == "libreoffice" else None)
         assert check_libreoffice_available() is False
@@ -604,11 +598,11 @@ class TestProactive:
     def test_pro_001_module_size_enforcement(self):
         """No source file should exceed the module size limit.
 
-        Current state: doc2txt.py is a 3,496-line monolith (limit: 3,600).
-        After modularization, tighten to 500 lines per module.
+        The limit sits about 20% above the largest module (doc2txt.py, 996 lines
+        after the 2026-10-16 split), so it stops a monolith regrowing, not routine edits.
         """
         project_root = Path(__file__).parent.parent
-        max_lines = 3800  # Current limit (monolith). Tighten after modularization.
+        max_lines = 1200
 
         violations = []
         for py_file in project_root.glob("*.py"):
@@ -628,31 +622,32 @@ class TestProactive:
         Detects hardcoded format checks that bypass the central registry.
         """
         project_root = Path(__file__).parent.parent
-        source = (project_root / "doc2txt.py").read_text()
 
         # Find all lines with hardcoded extension checks outside the registry
         violations = []
-        for i, line in enumerate(source.splitlines(), 1):
-            # Skip the SUPPORTED_EXTENSIONS definition itself
-            if "SUPPORTED_EXTENSIONS" in line:
-                continue
-            # Skip comments and strings in format dispatch (the switch-case is OK)
-            if line.strip().startswith("#"):
-                continue
-            # Look for extension equality checks like == '.pdf' or in ('.doc',
-            for ext in ['.pdf', '.docx', '.doc', '.rtf', '.odt']:
-                if f"== '{ext}'" in line or f'== "{ext}"' in line:
-                    # Allow in extract_text dispatcher (the legitimate dispatch)
-                    if "def extract_text" not in source.splitlines()[max(0, i-5):i]:
-                        # Check if we're inside extract_text function body
-                        # (rough heuristic: within 20 lines of "def extract_text")
-                        context_start = max(0, i - 20)
-                        context = source.splitlines()[context_start:i]
-                        if any("def extract_text(" in cl for cl in context):
-                            continue
-                        if any("def find_documents(" in cl for cl in context):
-                            continue
-                        violations.append(f"Line {i}: {line.strip()}")
+        for py_file in sorted(project_root.glob("doc2txt*.py")):
+            source = py_file.read_text()
+            for i, line in enumerate(source.splitlines(), 1):
+                # Skip the SUPPORTED_EXTENSIONS definition itself
+                if "SUPPORTED_EXTENSIONS" in line:
+                    continue
+                # Skip comments and strings in format dispatch (the switch-case is OK)
+                if line.strip().startswith("#"):
+                    continue
+                # Look for extension equality checks like == '.pdf' or in ('.doc',
+                for ext in ['.pdf', '.docx', '.doc', '.rtf', '.odt']:
+                    if f"== '{ext}'" in line or f'== "{ext}"' in line:
+                        # Allow in extract_text dispatcher (the legitimate dispatch)
+                        if "def extract_text" not in source.splitlines()[max(0, i-5):i]:
+                            # Check if we're inside extract_text function body
+                            # (rough heuristic: within 20 lines of "def extract_text")
+                            context_start = max(0, i - 20)
+                            context = source.splitlines()[context_start:i]
+                            if any("def extract_text(" in cl for cl in context):
+                                continue
+                            if any("def find_documents(" in cl for cl in context):
+                                continue
+                            violations.append(f"{py_file.name}:{i}: {line.strip()}")
 
         # This is advisory — violations may be legitimate dispatch logic
         # Only fail if there are clearly wrong hardcoded checks
@@ -683,16 +678,15 @@ class TestProactive:
         """BUG-006: results are classified by result_status(), never by a substring of the message.
 
         A substring test also matches the filename: "FAILED: Skipped items.pdf - ..."
-        counted as skipped in run_simple and run_with_hud. doc2txt_hud.py is exempt:
-        its "FAIL" in msg only colours a log line.
+        counted as skipped in run_simple and run_with_hud.
         """
         import re
 
         project_root = Path(__file__).parent.parent
         violations = [
-            f"{name}:{i}: {line.strip()}"
-            for name in ("doc2txt.py", "doc2txt_watcher.py")
-            for i, line in enumerate((project_root / name).read_text().splitlines(), 1)
+            f"{f.name}:{i}: {line.strip()}"
+            for f in sorted(project_root.glob("doc2txt*.py"))
+            for i, line in enumerate(f.read_text().splitlines(), 1)
             if re.search(r"\bin message\b", line)
         ]
         assert not violations, "Use result_status():\n" + "\n".join(violations)

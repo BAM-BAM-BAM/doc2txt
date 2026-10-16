@@ -161,3 +161,14 @@
 - A check placed after a filter that already excludes everything it matches is dead code, and its unit test (calling the check directly) keeps it looking alive
 - A grep assertion over a hook must be anchored on the dangerous call; the broad `| grep -…q` pattern also matched a harmless small-payload grep and could never pass
 - An open-ended "as discovered" backlog item closes by moving the instruction into the per-bug protocol that runs every time
+
+### 2026-10-16: Split doc2txt.py into CLI, extractors and OCR modules
+
+**Change**: `doc2txt.py` (2,447 lines) becomes the CLI only (996). OCR engines, GPU management and per-page PDF extraction move to `doc2txt_ocr.py` (845). Discovery, the status labels, the per-format extractors and `process_document` with its worker move to `doc2txt_extractors.py` (636), so the watcher no longer imports the CLI module. Unused aliases `process_pdf`/`process_pdf_worker` and the "re-exported for tests" imports are deleted; tests import from the defining module. PRO-001's limit drops from 3,800 to 1,200; PRO-002 and PRO-004 scan every `doc2txt*.py` instead of named files. 136 tests.
+
+**Evidence**: An AST comparison with main finds each of the 52 remaining top-level names (main's 54 minus the two deleted aliases) in exactly one module with an unchanged body, and every `global` name assigned in its own module (it reports a planted misplaced `_paddle_ocr_instance`). On a fixture of a text PDF, a scanned PDF, a broken PDF, a DOCX, an RTF and an owner file, main and the split give byte-identical `.md` files and the same summaries and exit codes with `-j 1`, `-j 2` and full-page Tesseract OCR, and the same watcher log lines.
+
+**Lessons**:
+- A source-scanning test that names its files loses coverage silently when code moves; glob the module family instead
+- ruff does not report a `global` name whose top-level assignment moved to another module (the `global` statement suppresses F821), and this OCR code swallows the NameError; check `global` pairs when moving code
+- `patch("module.name")` replaces the name where it is looked up; after a move, retarget it to the defining module, and make sure the old module no longer imports the name, so a stale target fails loudly

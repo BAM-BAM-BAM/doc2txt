@@ -8,8 +8,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from doc2txt import (
-    SUPPORTED_EXTENSIONS,
+from doc2txt_extractors import (
     find_documents,
     extract_text_from_docx,
     extract_text,
@@ -17,6 +16,7 @@ from doc2txt import (
     _heading_level,
     process_document,
 )
+from doc2txt_models import SUPPORTED_EXTENSIONS
 
 
 class TestInvSupportedExtensions:
@@ -192,7 +192,7 @@ class TestQualExtractTextFromDocx:
         assert "Page 2 content" in result[1]
 
     def test_int_stats_tracking(self, tmp_path):
-        from doc2txt import ProcessingStats
+        from doc2txt_models import ProcessingStats
         stats = ProcessingStats()
         path = self._create_docx(tmp_path, ["Content"])
         extract_text_from_docx(path, stats=stats)
@@ -222,7 +222,7 @@ class TestContractExtractTextDispatcher:
     def test_bound_doc_without_libreoffice(self, tmp_path):
         path = tmp_path / "test.doc"
         path.write_bytes(b"fake doc content")
-        with patch('doc2txt.check_libreoffice_available', return_value=False):
+        with patch('doc2txt_extractors.check_libreoffice_available', return_value=False):
             with pytest.raises(RuntimeError, match="LibreOffice is required"):
                 extract_text(path)
 

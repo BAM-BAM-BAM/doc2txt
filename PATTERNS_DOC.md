@@ -15,7 +15,7 @@ domain rules (see `FGT_DOMAIN_DOC.md`), review triggers (see `REVIEWS_DOC.md`).
 The canonical set of supported extensions lives in one place:
 
 ```python
-# doc2txt.py (top-level constant)
+# doc2txt_models.py (top-level constant)
 SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.rtf', '.odt'}
 ```
 
@@ -139,27 +139,22 @@ def test_pro_no_hardcoded_extensions():
 
 ## Module Size Enforcement
 
-The codebase is currently a single 3,496-line file (`doc2txt.py`).
-This is a known technical debt item (see BACKLOG.md).
+Flat modules, one concern each (lines as of 2026-10-16):
 
-**Target structure after modularization:**
+| Module | Lines | Holds |
+|--------|-------|-------|
+| `doc2txt.py` | 996 | CLI: argument parsing, progress lines, result counting, the four runners, `main` |
+| `doc2txt_learning.py` | 974 | `AdaptiveLearner` (OCR skip decisions) |
+| `doc2txt_ocr.py` | 845 | OCR engines, GPU management, per-page PDF extraction |
+| `doc2txt_extractors.py` | 636 | Discovery, status labels, per-format extractors, `process_document` and its worker |
+| `doc2txt_watcher.py` | 488 | Nightly folder watcher |
+| `doc2txt_hud.py` | 274 | Curses progress display |
+| `doc2txt_models.py` | 192 | Data models, `SUPPORTED_EXTENSIONS`, `parse_formats` |
+| `doc2txt_quality.py` | 130 | Text quality scoring |
 
-```
-doc2txt/
-  __init__.py
-  cli.py           # Argument parsing
-  extractors/      # One per format
-  ocr/             # OCR engine wrappers
-  learning/        # Adaptive ML system
-  quality.py       # Text quality scoring
-  hud.py           # Curses-based progress display
-  models.py        # Data models (QualityMetrics, ImageFeature)
-```
+`doc2txt.py` imports `doc2txt_extractors.py` and `doc2txt_ocr.py`, and
+`doc2txt_extractors.py` imports `doc2txt_ocr.py`. No module imports the CLI: the
+watcher uses `doc2txt_extractors.py`.
 
-**MODULE_LIMITS** (for PRO-* enforcement):
-
-| Directory | Max Lines | Current |
-|-----------|-----------|---------|
-| `./` | 3,500 | 3,496 (monolith) |
-
-Tighten limits to 500 per module after modularization.
+**PRO-001** caps every module at 1,200 lines, about 20% above the largest. It stops a
+monolith regrowing; a module that reaches it is split along a concern, not trimmed.

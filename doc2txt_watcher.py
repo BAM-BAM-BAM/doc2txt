@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from doc2txt import iter_documents
+from doc2txt_extractors import iter_documents
 from doc2txt_models import SUPPORTED_EXTENSIONS, parse_formats
 
 logger = logging.getLogger("doc2txt.watcher")
@@ -304,7 +304,7 @@ class FolderWatcher:
         Created and Skipped (exists) results are marked processed; a failure is not,
         so the next scan retries it. A dry run marks nothing.
         """
-        from doc2txt import STATUS_SKIPPED, process_document, result_status
+        from doc2txt_extractors import STATUS_SKIPPED, process_document, result_status
 
         ready = [(p, r) for p, r in scan_results if r == "ready"]
         skipped = [(p, r) for p, r in scan_results if r != "ready"]
