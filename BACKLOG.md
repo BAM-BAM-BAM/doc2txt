@@ -8,6 +8,36 @@ If it's not in this file, it doesn't exist.
 
 ## Open
 
+### Estate review #1 findings (2026-10-16)
+
+From the quarterly estate review (fgt-config METHODOLOGY_LOG, 2026-10-16).
+
+- [ ] **Documents that share a stem share one output, and the second is lost
+      silently.** Reproduced at 93f5133: `Report.docx` and `Report.pdf` in one
+      folder → `Created: Report.md`, `Skipped (exists)`, then "Single scan:
+      0 files" on the next run. In the watched OneDrive tree (counts only):
+      157 folder/stem groups collide and 150 documents have no markdown.
+      FGT_DOMAIN_DOC INV-004 (output keeps the input's stem) forces the
+      collision; needs a naming decision.
+- [ ] **Five tests cannot fail** (each mutation-confirmed):
+      `test_pro_002_no_hardcoded_extensions_outside_registry` (warns, never
+      asserts); `test_eval_uncertainty_highest_at_half` (recomputes the
+      formula inline); `test_eval_shuffle_produces_different_order` and
+      `test_int_shuffle` (pass with the shuffle removed);
+      `test_inv_thresholds_cover_all_cases` (re-implements the partition);
+      `test_inv_contains_*` (assert a constant's own value).
+- [ ] **The watcher skips `/mnt/g/Shared drives`:** the Google drive has not
+      been mounted since the 2026-10-15 boot (`systemctl status mnt-g.mount`:
+      "special device G: does not exist"). Same cause as tierras' 47 t1 test
+      failures.
+- [ ] **Unread:** `gpu_log.csv` (4.8 MB); 11 of 19 files in
+      `vendor/fgt-config/scripts`; the second half of `clear_gpu_memory()`
+      (probes PIDs, kills none, though its docstring says it kills); the
+      `--learn` path (no `learning.db`, no `--learn` in the crontab line).
+- [ ] **Stale refs:** 8 remote-tracking refs whose branches are gone
+      (`git remote prune origin --dry-run`); local `fgt-catchup-2026-09-28`
+      (squash-merged as #2).
+
 ### OCR
 - [ ] **Scanned PDFs convert to empty `.md` files and are recorded as processed.** Found 2026-10-16 while reviewing the split plan.
   - Tesseract on an image region: `ocr_image_region` passes `clip=` to `page.get_textpage_ocr`, which raises TypeError in pymupdf 1.27.2.3 (`.venv`, the cron interpreter) and 1.26.7 (system). Full-page Tesseract (`--force-ocr`) works.
