@@ -47,7 +47,7 @@ From the quarterly estate review (fgt-config METHODOLOGY_LOG, 2026-10-16).
 ## Resolved
 
 ### OCR (2026-10-16, BUG-010)
-- [x] Scanned PDFs converted to empty `.md` files and were recorded as processed -- Tesseract region OCR fixed (`pdfocr_tobytes`), rotated pages, zero-area images and duplicate text-layer words handled, one engine table (`OCR_FALLBACKS`) for the CLI and the watcher, OCR errors fail the document; test_qual_004, test_bound_020, test_bound_021, test_contract_ocr_engine_resolution; `scripts/ocr_canary.py` run daily by the sweep. Regeneration of the 5,071 affected outputs is tracked by the sweep
+- [x] Scanned PDFs converted to empty `.md` files and were recorded as processed -- Tesseract region OCR fixed (`pdfocr_tobytes`), rotated pages, zero-area images and duplicate text-layer words handled, one engine table (`OCR_FALLBACKS`) for the CLI and the watcher, OCR errors fail the document; test_qual_004, test_bound_020, test_bound_021, test_bound_022, test_contract_ocr_engine_resolution; `scripts/ocr_canary.py` run daily by the sweep. Regeneration of the 5,071 affected outputs is tracked by the sweep
 - [x] PRO-002 could not fail (it only warned) -- deleted; PATTERNS_DOC's PRO example now lists the PRO tests that can fail
 
 ### Architecture (2026-10-16)

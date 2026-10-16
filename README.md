@@ -39,7 +39,7 @@ pip install surya-ocr
 | `surya` (CLI default) | surya, tesseract | Surya needs `pip install surya-ocr`; GPU recommended |
 | `auto` (watcher default) | surya, tesseract | Same as `surya` |
 | `tesseract` | tesseract | System package `tesseract-ocr` |
-| `paddle` | paddle | Only when named: PaddleOCR 3.3 fails on CPU here (oneDNN) |
+| `paddle` | paddle | Only when named: PaddlePaddle 3.3 fails on CPU here (oneDNN) |
 
 An OCR error fails the document (`FAILED:`); no `.md` is written, and the watcher retries it.
 

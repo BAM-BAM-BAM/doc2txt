@@ -608,7 +608,8 @@ class TestBoundary:
     def test_bound_021_zero_area_image_skipped(self, tmp_path, monkeypatch):
         """BUG-010: an image off the page, or a sliver along its edge, is skipped, not an error.
 
-        Both render to a pixmap with a zero side, and tobytes() raises on that.
+        Both render to a pixmap with a zero side, and tobytes() raises on that. The page is
+        360 pt tall, a whole number of pixels at 300 dpi, so the sliver renders 0 px high.
         """
         import doc2txt_ocr
         import pymupdf
@@ -618,13 +619,34 @@ class TestBoundary:
         pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 200, 200), False)
         pix.clear_with(0)
         doc = pymupdf.open()
-        page = doc.new_page(width=400, height=400)
+        page = doc.new_page(width=400, height=360)
         page.insert_image(pymupdf.Rect(500, 500, 600, 600), pixmap=pix)
-        page.insert_image(pymupdf.Rect(0, 400 - 0.000122, 400, 500), pixmap=pix)
+        page.insert_image(pymupdf.Rect(0, 360 - 0.000122, 400, 460), pixmap=pix)
         pdf = tmp_path / "edge.pdf"
         doc.save(pdf)
 
         assert process_document(pdf, overwrite=False, dry_run=False, ocr_engine="tesseract")[:2] == (True, "Created: edge.md")
+
+
+    def test_bound_022_no_engine_force_ocr_uses_text_layer(self, tmp_path, monkeypatch):
+        """With no OCR engine available, --force-ocr keeps the text layer (the CLI warns OCR is off)."""
+        import doc2txt_ocr
+        import pymupdf
+        from doc2txt_extractors import process_document
+
+        def no_tesseract(*args, **kwargs):
+            raise RuntimeError("Tesseract is not installed")
+
+        for name in ("check_surya_available", "check_paddleocr_available", "check_tesseract_available"):
+            monkeypatch.setattr(doc2txt_ocr, name, lambda: False)
+        monkeypatch.setattr(pymupdf.Page, "get_textpage_ocr", no_tesseract)
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), "Typed text layer")
+        pdf = tmp_path / "typed.pdf"
+        doc.save(pdf)
+
+        assert process_document(pdf, overwrite=False, dry_run=False, force_ocr=True)[:2] == (True, "Created: typed.md")
+        assert "Typed text layer" in pdf.with_suffix(".md").read_text()
 
 
 class TestContract:

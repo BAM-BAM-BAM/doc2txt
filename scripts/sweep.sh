@@ -97,7 +97,7 @@ fi
 # --- OCR canary: the cron's interpreter can OCR a scanned page ---
 #
 # Justification: production OCR failed silently in 2 ways for 5 months (pymupdf rejected
-# get_textpage_ocr's clip argument; PaddleOCR 3.3 fails on this CPU), and 5,071 outputs
+# get_textpage_ocr's clip argument; PaddlePaddle 3.3 fails on this CPU), and 5,071 outputs
 # lost the text in their images (BUG-010). The cron's .venv changes without commits, and
 # CI has no tesseract, so no test sees it. Runs the main checkout at most once a day;
 # the stamp is written only on success. Retire when CI runs OCR with the cron's versions.
@@ -106,7 +106,7 @@ OCR_STAMP="$HOME/.doc2txt/ocr-canary.ok"
 if [ -x "$OCR_HOME/.venv/bin/python" ] && [ -f "$OCR_HOME/scripts/ocr_canary.py" ]; then
     if [ -n "$(find "$OCR_STAMP" -mmin -1440 2>/dev/null)" ]; then
         pass "ocr — canary passed within 24h"
-    elif CANARY_OUT=$(env -i HOME="$HOME" PATH=/usr/bin:/bin "$OCR_HOME/.venv/bin/python" "$OCR_HOME/scripts/ocr_canary.py" 2>/dev/null); then
+    elif CANARY_OUT=$(env -i HOME="$HOME" PATH=/usr/bin:/bin "$OCR_HOME/.venv/bin/python" "$OCR_HOME/scripts/ocr_canary.py" 2>&1); then
         mkdir -p "$(dirname "$OCR_STAMP")" && touch "$OCR_STAMP"
         pass "ocr — canary read a scanned page under the cron interpreter"
     else

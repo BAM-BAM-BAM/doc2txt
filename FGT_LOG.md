@@ -175,7 +175,7 @@
 
 ### 2026-10-16: Image OCR works, fails loudly, and has one engine table (BUG-010)
 
-**Change**: Tesseract region OCR uses `pix.pdfocr_tobytes` (pymupdf rejected `get_textpage_ocr(clip=)`), renders rotated pages with `rotation_matrix`, skips zero-sized pixmaps before `tobytes`, and drops OCR text that repeats a scanned PDF's invisible text layer. `OCR_FALLBACKS` replaces four engine chains; PaddleOCR runs only when named. OCR errors now fail the document. PRO-002 deleted. `scripts/ocr_canary.py` runs daily from the sweep under the cron's interpreter; a temporary sweep check tracks the regeneration of the 5,071 affected outputs. 139 tests.
+**Change**: Tesseract region OCR uses `pix.pdfocr_tobytes` (pymupdf rejected `get_textpage_ocr(clip=)`), renders rotated pages with `rotation_matrix`, skips zero-sized pixmaps before `tobytes`, and drops OCR text that repeats a scanned PDF's invisible text layer. `OCR_FALLBACKS` replaces four engine chains; PaddleOCR runs only when named. OCR errors now fail the document. PRO-002 deleted. `scripts/ocr_canary.py` runs daily from the sweep under the cron's interpreter; a temporary sweep check tracks the regeneration of the 5,071 affected outputs. 140 tests.
 
 **Evidence**: 5,071 outputs from PDFs with images (854 empty) had no image text; on main a scanned test PDF gives `Created:` with an empty body, and the CLI under `.venv` picks `paddle`. Fixed code on 15 real documents added text (80 → 9,886 and 1,996 → 3,347 non-space characters). The plan went through three reviewers and four confirmation rounds; they found the CLI's own engine chain, duplicate text, rotated-page regions, zero-area images and an edge sliver, each reproduced before the fix.
 

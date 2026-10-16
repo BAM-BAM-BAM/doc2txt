@@ -34,7 +34,7 @@ def check_surya_available() -> bool:
 
 
 # Engines tried, in order, for each name the CLI and the watcher accept. PaddleOCR runs
-# only when named: PaddleOCR 3.3 on this CPU raises NotImplementedError (oneDNN), and
+# only when named: PaddlePaddle 3.3 on this CPU raises NotImplementedError (oneDNN), and
 # MemoryError with oneDNN off, so it must never be picked as a fallback.
 OCR_FALLBACKS = {
     "auto": ["surya", "tesseract"],
@@ -737,7 +737,7 @@ def extract_page_text(
     Returns:
         Tuple of (text, used_ocr, ocr_chars, log_message)
     """
-    if ocr_engine == "none" and not force_ocr:
+    if ocr_engine == "none":
         with SuppressOutputFD(suppress=suppress_output):
             text = page.get_text().strip()
         return text, False, 0, ""

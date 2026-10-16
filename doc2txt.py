@@ -685,7 +685,7 @@ def main() -> int:
         choices=sorted(OCR_FALLBACKS),
         default="surya",
         help="OCR engine (default: surya, falling back to tesseract; auto is the same). "
-             "paddle runs only when named: PaddleOCR 3.3 fails on CPU here."
+             "paddle runs only when named: PaddlePaddle 3.3 fails on CPU here."
     )
     parser.add_argument(
         "--debug",
@@ -885,7 +885,7 @@ def main() -> int:
         print(f"  Tesseract: {check_tesseract_available()}")
         print(f"  Requested: {args.ocr_engine}")
         # Pre-configure and show Surya batch sizes if using surya
-        if args.ocr_engine == "surya" and check_surya_available():
+        if args.ocr_engine in ("surya", "auto") and check_surya_available():
             configure_surya_batch_sizes()
             rec_batch = os.environ.get('RECOGNITION_BATCH_SIZE', '512 (default)')
             det_batch = os.environ.get('DETECTOR_BATCH_SIZE', 'default')
@@ -896,7 +896,7 @@ def main() -> int:
         use_ocr, ocr_engine, _ = resolve_ocr_engine(args.ocr_engine)
         if not args.quiet:
             if not use_ocr:
-                print("Warning: No OCR engine available. OCR disabled. Install tesseract-ocr.", file=sys.stderr)
+                print(f"Warning: no OCR engine available for --ocr-engine {args.ocr_engine}; OCR disabled.", file=sys.stderr)
             elif args.ocr_engine not in ("auto", ocr_engine):
                 print(f"Warning: {args.ocr_engine} not available, using {ocr_engine}.", file=sys.stderr)
 
