@@ -139,18 +139,6 @@ class TestInvFileReadiness:
         assert not ready
         assert "temp pattern" in reason
 
-    def test_bound_word_owner_file_not_ready(self, checker, tmp_path):
-        """BUG-007: a Word owner file (~$name.docx) is never processed."""
-        owner = tmp_path / "~$report.docx"
-        owner.write_bytes(b"x" * 200)
-        import os
-        old_time = time.time() - 3600
-        os.utime(owner, (old_time, old_time))
-
-        ready, reason = checker.is_ready(owner)
-        assert not ready
-        assert "~$" in reason
-
 
 class TestProcessedTracker:
     """Tests for ProcessedTracker."""
@@ -394,6 +382,23 @@ class TestFolderWatcher:
         watcher.close()
 
         assert results == [(watched / "link" / "linked.pdf", "ready")]
+
+    def test_bound_word_owner_file_not_scanned(self, tmp_path):
+        """BUG-009: a Word owner file (~$name.docx) is not a document, so the scan never lists it."""
+        self._make_old_file(tmp_path / "report.docx")
+        self._make_old_file(tmp_path / "~$report.docx")
+
+        config = WatchConfig(
+            watch_dirs=[tmp_path],
+            cooldown_minutes=0,
+            min_file_size=10,
+            db_path=tmp_path / "watcher.db",
+        )
+        watcher = FolderWatcher(config)
+        results = watcher.scan_once()
+        watcher.close()
+
+        assert [p.name for p, _ in results] == ["report.docx"]
 
     def test_int_scan_nonexistent_dir(self, tmp_path):
         """scan_once handles non-existent watch directory gracefully."""

@@ -45,17 +45,6 @@ class WatchConfig:
     verbose: bool = False
 
 
-# Lock file patterns created by editors and office suites
-EDITOR_LOCK_PATTERNS = [
-    ".~lock.*#",        # LibreOffice
-    "~$*",              # Microsoft Office (Word, Excel, PowerPoint)
-    "*.swp",            # Vim swap
-    "*.swo",            # Vim swap overflow
-    "*~",               # Emacs backup
-    ".*.kate-swp",      # Kate editor
-    "*.lck",            # Generic lock files
-]
-
 # Temp file patterns from cloud sync tools
 CLOUD_SYNC_TEMP_PATTERNS = [
     "*.gstmp",          # Google Drive temp
@@ -97,7 +86,7 @@ class FileReadinessChecker:
 
         # Check temp/sync file patterns
         name_lower = path.name.lower()
-        for pattern in CLOUD_SYNC_TEMP_PATTERNS + EDITOR_LOCK_PATTERNS:
+        for pattern in CLOUD_SYNC_TEMP_PATTERNS:
             if self._matches_pattern(name_lower, pattern.lower()):
                 return False, f"matches temp pattern: {pattern}"
 
@@ -138,10 +127,6 @@ class FileReadinessChecker:
         """Simple glob-style pattern matching."""
         if pattern.startswith("*."):
             return name.endswith(pattern[1:])
-        if pattern.startswith(".") and pattern.endswith("*"):
-            return name.startswith(pattern[:-1])
-        if pattern.startswith("~$"):
-            return name.startswith("~$")
         return name == pattern
 
     def _check_editor_locks(self, path: Path) -> str | None:

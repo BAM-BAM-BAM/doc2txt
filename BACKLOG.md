@@ -11,8 +11,8 @@ If it's not in this file, it doesn't exist.
 ### Architecture
 - [ ] Further split doc2txt.py (2,278 lines) into extractors.py + ocr.py + cli.py -- source: PATTERNS_DOC.md target structure
 
-### CLI
-- [ ] Batch discovery (`iter_documents`) does not skip `~$` Word owner files, so `doc2txt.py -r` reports them `FAILED … File is not a zip file` and exits 1; the watcher filters them via `EDITOR_LOCK_PATTERNS` (doc2txt_watcher.py), which doc2txt.py cannot import -- source: BUG-006..008 PR review 2026-10-16
+### Watcher
+- [ ] `FileReadinessChecker.is_ready`'s `CLOUD_SYNC_TEMP_PATTERNS` check cannot match anything `scan_once` passes it: discovery yields only document extensions, and no pattern ends in one (`*.tmp`, `*.part`, `desktop.ini`, …). Delete it, or make discovery use it -- source: BUG-009 2026-10-16
 
 ### Tooling
 - [ ] fgt-config template `templates/scaffold/hooks/fgt_stop_check.sh.tmpl:54`: `changed_in_session` ends a pipe with `grep -qE` under `pipefail`, so `git log` can die of SIGPIPE and the docs check reads "not updated" (11 false blocks in 200 runs here). Fixed in doc2txt's copy; lang-app's copy has the same line -- source: BUG-006..008 session 2026-10-16
@@ -21,6 +21,9 @@ If it's not in this file, it doesn't exist.
 - [ ] Expand FGT_DOMAIN_DOC.md with additional bug patterns as discovered -- source: FGT methodology
 
 ## Resolved
+
+### CLI (2026-10-16, BUG-009)
+- [x] Batch discovery did not skip `~$` Word owner files, so `doc2txt.py -r` reported them FAILED and exited 1 -- `iter_documents` skips `OFFICE_OWNER_PREFIX`; watcher's unreachable duplicate removed; test_bound_019, test_bound_word_owner_file_not_scanned
 
 ### CLI (2026-10-16)
 - [x] `run_simple` counters matched substrings, so a failure on `Skipped items.pdf` counted as skipped and exited 0 -- BUG-006: `result_status()` + `count_outcome()` (also `run_with_hud`), test_bound_016, test_pro_004

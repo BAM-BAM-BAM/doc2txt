@@ -47,13 +47,19 @@ def convert_windows_path(path_str: str) -> Path:
     return Path(path_str)
 
 
+# Microsoft Office "owner" (lock) files: ~$ plus the document's name, same
+# extension, ~162 bytes, left behind when Office crashes. Never a document.
+OFFICE_OWNER_PREFIX = "~$"
+
+
 def iter_documents(
     directory: Path,
     recursive: bool,
     extensions: set[str],
     on_skip: Callable[[Path, OSError], None],
 ) -> Iterator[Path]:
-    """Yield files under directory whose lowercased suffix is in extensions.
+    """Yield files under directory whose lowercased suffix is in extensions,
+    except Office owner files (OFFICE_OWNER_PREFIX).
 
     Follows symlinked files and directories. Each directory is walked once,
     keyed by (st_dev, st_ino), so link cycles terminate. Whatever cannot be
@@ -79,7 +85,7 @@ def iter_documents(
             continue
         for entry in entries:
             path = Path(entry.path)
-            wanted = path.suffix.lower() in extensions
+            wanted = path.suffix.lower() in extensions and not entry.name.startswith(OFFICE_OWNER_PREFIX)
             if not (wanted or recursive):
                 continue
             try:
