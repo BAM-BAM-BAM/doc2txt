@@ -185,3 +185,13 @@
 - A scanned PDF often carries an invisible OCR text layer; OCRing its image again duplicates every word
 - `pixmap.tobytes()` raises on a zero side, and a rect test misses a 0.000122-pt sliver; check the pixmap
 - Check the cron's own interpreter: the defect lived in `.venv` (paddle) and in code no test ran
+
+### 2026-10-17: BUG-010 outputs regenerated; temporary sweep check deleted
+
+**Change**: The regeneration job finished, so `scripts/sweep.sh`'s temporary "OCR regeneration progress" block is deleted. BUG-010's Data Revalidation records the counts. BACKLOG: the 2 timeouts join the time-limit item, and 7 more vector-outline PDFs join that item.
+
+**Evidence**: Of 5,071 outputs, 4,204 replaced, 735 `had-ocr`, 59 `kept-old`, 71 skipped for a shared stem, 0 failed, 2 timed out; 830 of the 854 empty outputs now hold text. 4,204 backups. The job was stopped twice mid-run; afterwards no temporary file remained and no output was missing. The 2 timeouts are one-page PDFs with about 1.04 million image placements each.
+
+**Lessons**:
+- A loop that compares each image placement with every earlier one is cheap for the few images a page normally has and unbounded for a page tiled from a million; a time limit has to cover the number of placements as well as their size
+- A long job whose writes are atomic and whose backup is taken once can be stopped with `kill -TERM` at any point; both stops here lost only the documents in progress
