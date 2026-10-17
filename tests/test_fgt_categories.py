@@ -666,8 +666,12 @@ class TestBoundary:
         def no_git(*args, **kwargs):
             raise FileNotFoundError("git")
 
-        monkeypatch.setattr(subprocess, "run", no_git)
-        assert doc2txt_extractors.code_version() == "unknown"
+        def hung_git(args, **kwargs):
+            raise subprocess.TimeoutExpired(args, 5)
+
+        for failure in (no_git, hung_git):
+            monkeypatch.setattr(subprocess, "run", failure)
+            assert doc2txt_extractors.code_version() == "unknown"
 
 
 class TestContract:
@@ -745,6 +749,15 @@ class TestContract:
         for _ in range(2):
             assert process_document(pdf, overwrite=True, dry_run=False, stats=stats)[0]
             assert _made_by(md) == line
+
+        import docx
+        import re
+        note = tmp_path / "note.docx"
+        word = docx.Document()
+        word.add_paragraph("after a PDF")
+        word.save(str(note))
+        assert process_document(note, overwrite=True, dry_run=False, stats=stats)[0]
+        assert re.fullmatch(r"> Made by doc2txt ([0-9a-f]{7}|unknown) on \d{4}-\d{2}-\d{2}", _made_by(note.with_suffix(".md")))
 
 
 class TestSchema:

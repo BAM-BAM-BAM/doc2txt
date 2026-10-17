@@ -399,6 +399,8 @@ def code_version() -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--short=7", "HEAD"],
             cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=5,
+            # Run from another repo's git hook, GIT_DIR would name that repo's commit
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         )
     except (OSError, subprocess.TimeoutExpired):
         return "unknown"
