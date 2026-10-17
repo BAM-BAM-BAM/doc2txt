@@ -137,7 +137,8 @@ storage format. Validate at ingestion. Convert only at display.
 | Rotated pages (BUG-010) | PDF | On a `/Rotate` page, image rects are unrotated but `get_pixmap` clips in rotated space, so the wrong region is OCR'd | Render with `rect * page.rotation_matrix`; compare text-layer words with the unrotated rect |
 | Zero-area images (BUG-010) | PDF | An image off the page, or a sliver along its edge, renders to a pixmap with a zero side and `tobytes()` raises `FzErrorArgument` (1.6% of sampled image PDFs) | Check the pixmap's size before `tobytes()` |
 | PaddlePaddle 3.3 on CPU (BUG-010) | PDF (OCR) | NotImplementedError (oneDNN); with `enable_mkldnn=False`, MemoryError | Never a fallback; used only when named |
-| Vector-only PDFs | PDF | One-page PDFs with no fonts and only drawings give an empty output: correct for 825 of 842 measured; 17 hold 61–609 words drawn as outlines | Empty output is not by itself a defect; the 17 need full-page OCR (BACKLOG) |
+| Vector-only PDFs | PDF | One-page PDFs with no fonts and only drawings give an empty output: correct for 825 of 842 measured; 17 hold 61–609 words drawn as outlines. 7 PDFs with only small images do the same | Empty output is not by itself a defect; the 24 need full-page OCR (BACKLOG) |
+| Many image placements | PDF | A page tiled from about a million image placements (2 measured) did not finish OCR within 30 minutes; each placement is compared with every earlier one | Open: no time limit per document (BACKLOG) |
 
 ---
 
