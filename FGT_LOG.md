@@ -190,8 +190,8 @@
 
 **Change**: The regeneration job finished, so `scripts/sweep.sh`'s temporary "OCR regeneration progress" block is deleted. BUG-010's Data Revalidation records the counts. BACKLOG: the 2 timeouts join the time-limit item, and 7 more vector-outline PDFs join that item.
 
-**Evidence**: Of 5,071 outputs, 4,204 replaced, 735 `had-ocr`, 59 `kept-old`, 71 skipped for a shared stem, 0 failed, 2 timed out; 830 of the 854 empty outputs now hold text. 4,204 backups. The job was stopped twice mid-run; afterwards no temporary file remained and no output was missing. The 2 timeouts are one-page PDFs with about 1.04 million image placements each.
+**Evidence**: Of 5,071 outputs, 4,204 rewritten, 735 already held OCR text, 59 kept their longer old text, 71 skipped for a same-name DOCX/DOC/RTF/ODT, 0 failed, 2 did not finish in 30 minutes; 830 of the 854 empty outputs now hold text. 4,204 backups. About 3.8 h of run time in three runs; it was stopped twice with `kill -TERM` mid-run, and after each stop no temporary file remained, no output was missing and no document was recorded as failed. The 2 unfinished documents are one-page PDFs with about 1.04 million image placements each.
 
 **Lessons**:
-- A loop that compares each image placement with every earlier one is cheap for the few images a page normally has and unbounded for a page tiled from a million; a time limit has to cover the number of placements as well as their size
-- A long job whose writes are atomic and whose backup is taken once can be stopped with `kill -TERM` at any point; both stops here lost only the documents in progress
+- A loop that compares each image placement with every earlier one is cheap for the few images a page normally has and unbounded for a page tiled from a million; neither image size nor image count bounds the time, so the limit has to be per document
+- A long job whose writes are atomic and whose backup is taken once can be stopped with `kill -TERM` at any point; a restart redoes only the documents in progress
