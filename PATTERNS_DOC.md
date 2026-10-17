@@ -147,10 +147,10 @@ Flat modules, one concern each (lines as of 2026-10-16):
 
 | Module | Lines | Holds |
 |--------|-------|-------|
-| `doc2txt.py` | 989 | CLI: argument parsing, progress lines, result counting, the four runners, `main` |
+| `doc2txt.py` | 990 | CLI: argument parsing, progress lines, result counting, the four runners, `main` |
 | `doc2txt_learning.py` | 974 | `AdaptiveLearner` (OCR skip decisions) |
 | `doc2txt_ocr.py` | 819 | OCR engines, GPU management, per-page PDF extraction |
-| `doc2txt_extractors.py` | 636 | Discovery, status labels, per-format extractors, `process_document` and its worker |
+| `doc2txt_extractors.py` | 700 | Discovery, status labels, per-format extractors, the markdown header, `process_document` and its worker |
 | `doc2txt_watcher.py` | 490 | Nightly folder watcher |
 | `doc2txt_hud.py` | 274 | Curses progress display |
 | `doc2txt_models.py` | 192 | Data models, `SUPPORTED_EXTENSIONS`, `parse_formats` |

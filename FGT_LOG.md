@@ -195,3 +195,13 @@
 **Lessons**:
 - A loop that compares each image placement with every earlier one is cheap for the few images a page normally has and unbounded for a page tiled from a million; neither image size nor image count bounds the time, so the limit has to be per document
 - A long job whose writes are atomic and whose backup is taken once can be stopped with `kill -TERM` at any point; a restart redoes only the documents in progress
+
+### 2026-10-17: Each output records what made it
+
+**Change**: `create_markdown` writes `> Made by doc2txt <commit> on <date>` under the Source line, and for a PDF adds the pymupdf version, the OCR engine extraction used, and the counts of pages, pages with images and pages with OCR text. The Source path is now absolute. `extract_text_from_pdf` and the parallel worker record the engine and counts for each file; `--version` prints the commit. SCHEMA, CONTRACT and BOUND-023 tests; 143 tests.
+
+**Evidence**: BUG-010's revalidation had to open every reachable source PDF to find pages with images, and judged by a heuristic which 735 outputs already held OCR text; neither fact was recorded. `__version__` has been 1.0.0 since the first commit. A relative CLI argument wrote `> Source: x.pdf`. pymupdf has Tesseract compiled in (3,087 Tesseract symbols in `libmupdf.so.27.2`, no link to the system `libtesseract`), so its version is the OCR build.
+
+**Lessons**:
+- An engine name in a header says what was configured, not what happened; while OCR errors were swallowed every output named an engine. Record what the run produced (pages with images, pages with OCR text)
+- A provenance field that a person must keep current (`__version__`) never changes; take it from the checkout

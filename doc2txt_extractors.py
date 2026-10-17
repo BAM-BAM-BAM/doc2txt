@@ -4,8 +4,10 @@ import os
 import random
 import re
 import stat
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
+from datetime import date
 from pathlib import Path
 
 from doc2txt_models import (
@@ -160,11 +162,15 @@ def extract_text_from_pdf(
 
     # Resolve OCR engine with fallbacks
     ocr_available, active_engine, _ = resolve_ocr_engine(ocr_engine, use_ocr)
+    engine = active_engine if ocr_available else "none"
 
     total_pages = len(doc)
     if stats:
         stats.current_file_pages = total_pages
         stats.total_pages += total_pages
+        stats.current_file_ocr_engine = engine
+        stats.current_file_image_pages = 0
+        stats.current_file_ocr_text_pages = 0
 
     pages = []
     try:
@@ -176,7 +182,6 @@ def extract_text_from_pdf(
                     hud.refresh()
 
             # Extract page text (with OCR if available and needed)
-            engine = active_engine if ocr_available else "none"
             text, used_ocr, ocr_chars, log_msg = extract_page_text(
                 page,
                 engine,
@@ -194,6 +199,8 @@ def extract_text_from_pdf(
                 if log_msg:
                     stats.log(f"  p{page_num}: {log_msg}")
                 stats.processed_pages += 1
+                stats.current_file_image_pages += bool(page.get_images(full=False))
+                stats.current_file_ocr_text_pages += ocr_chars > 0
 
             pages.append(text)
 
@@ -338,7 +345,6 @@ def extract_text_via_libreoffice(
     stats: ProcessingStats | None = None,
 ) -> list[str]:
     """Extract text from .doc/.rtf/.odt by converting to .docx via LibreOffice."""
-    import subprocess
     import tempfile
 
     if not check_libreoffice_available():
@@ -387,12 +393,49 @@ def extract_text(
         raise ValueError(f"Unsupported format: {ext}")
 
 
-def create_markdown(source_path: Path, pages: list[str], page_label: str = "Page") -> str:
-    """Create markdown content from extracted text sections."""
+def code_version() -> str:
+    """Short commit of the checkout this module runs from, or "unknown"."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else "unknown"
+
+
+# Computed at import, so a long-running process keeps stamping the code it loaded.
+CODE_VERSION = code_version()
+
+
+def create_markdown(
+    source_path: Path,
+    pages: list[str],
+    page_label: str = "Page",
+    *,
+    ocr: tuple[str, bool, int, int] | None,
+) -> str:
+    """Create markdown content from extracted text sections.
+
+    ocr is (engine, force_ocr, image_pages, ocr_text_pages) for a PDF, None for other formats.
+    """
+    made_by = f"> Made by doc2txt {CODE_VERSION} on {date.today().isoformat()}"
+    if ocr is not None:
+        import pymupdf
+        engine, force_ocr, image_pages, ocr_text_pages = ocr
+        every_page = ", every page" if force_ocr and engine != "none" else ""
+        made_by += (
+            f" · pymupdf {pymupdf.__version__} · OCR engine: {engine}{every_page}"
+            f" · {len(pages)} pages, {image_pages} with images, OCR text on {ocr_text_pages}"
+        )
     lines = [
         f"# {source_path.stem}",
         "",
-        f"> Source: {source_path}",
+        f"> Source: {source_path.absolute()}",
+        ">",
+        made_by,
         "",
         "---",
         "",
@@ -425,6 +468,7 @@ def process_document(
     """
     md_path = source_path.with_suffix('.md')
     page_label = "Page" if source_path.suffix.lower() == '.pdf' else "Section"
+    doc_stats = stats if stats is not None else ProcessingStats()
 
     # Improve mode: always extract and compare
     if improve and md_path.exists():
@@ -435,9 +479,12 @@ def process_document(
             # Extract new version
             pages = extract_text(
                 source_path, use_ocr=use_ocr, ocr_engine=ocr_engine,
-                force_ocr=force_ocr, stats=stats, hud=hud, learner=learner,
+                force_ocr=force_ocr, stats=doc_stats, hud=hud, learner=learner,
             )
-            new_markdown = create_markdown(source_path, pages, page_label=page_label)
+            new_markdown = create_markdown(
+                source_path, pages, page_label=page_label,
+                ocr=_pdf_ocr_facts(source_path, doc_stats, force_ocr),
+            )
             new_text = '\n'.join(pages)
 
             # Read and strip existing
@@ -474,15 +521,28 @@ def process_document(
     try:
         pages = extract_text(
             source_path, use_ocr=use_ocr, ocr_engine=ocr_engine,
-            force_ocr=force_ocr, stats=stats, hud=hud, learner=learner,
+            force_ocr=force_ocr, stats=doc_stats, hud=hud, learner=learner,
         )
-        markdown_content = create_markdown(source_path, pages, page_label=page_label)
+        markdown_content = create_markdown(
+            source_path, pages, page_label=page_label,
+            ocr=_pdf_ocr_facts(source_path, doc_stats, force_ocr),
+        )
         md_path.write_text(markdown_content, encoding='utf-8')
         if stats:
             stats.md_bytes += len(markdown_content.encode('utf-8'))
         return True, f"Created: {md_path.name}", None
     except Exception as e:
         return False, f"FAILED: {source_path.name} - {e}", None
+
+
+def _pdf_ocr_facts(
+    source_path: Path, stats: ProcessingStats, force_ocr: bool,
+) -> tuple[str, bool, int, int] | None:
+    """create_markdown's ocr argument, from what extract_text_from_pdf recorded on stats."""
+    if source_path.suffix.lower() != '.pdf':
+        return None
+    return (stats.current_file_ocr_engine, force_ocr,
+            stats.current_file_image_pages, stats.current_file_ocr_text_pages)
 
 
 def _worker_init_suppress_output():
@@ -521,23 +581,25 @@ def process_document_worker(
 
     log_msgs = []
 
-    def extract_pages() -> tuple[list[str], int, int]:
-        """Extract text, returning (pages, ocr_pages, ocr_chars)."""
+    def extract_pages() -> tuple[list[str], int, int, tuple[str, bool, int, int] | None]:
+        """Extract text, returning (pages, ocr_pages, ocr_chars, create_markdown's ocr)."""
         if is_pdf:
             import pymupdf
             doc = pymupdf.open(source_path)
 
             ocr_available, active_engine, engine_logs = resolve_ocr_engine(ocr_engine, use_ocr)
             log_msgs.extend(engine_logs)
+            engine = active_engine if ocr_available else "none"
 
             pages = []
             ocr_pages_count = 0
             ocr_chars_count = 0
+            image_pages = 0
+            ocr_text_pages = 0
             total_pages = len(doc)
 
             try:
                 for page_num, page in enumerate(doc, start=1):
-                    engine = active_engine if ocr_available else "none"
                     text, used_ocr, ocr_chars, log_msg = extract_page_text(
                         page, engine, force_ocr, suppress_output=False
                     )
@@ -547,16 +609,18 @@ def process_document_worker(
                         ocr_chars_count += ocr_chars
                     if log_msg:
                         log_msgs.append(f"  p{page_num}/{total_pages}: {log_msg}")
+                    image_pages += bool(page.get_images(full=False))
+                    ocr_text_pages += ocr_chars > 0
 
                     pages.append(text)
             finally:
                 doc.close()
 
-            return pages, ocr_pages_count, ocr_chars_count
+            return pages, ocr_pages_count, ocr_chars_count, (engine, force_ocr, image_pages, ocr_text_pages)
         else:
             # Non-PDF: use the format dispatcher (no OCR)
             pages = extract_text(source_path)
-            return pages, 0, 0
+            return pages, 0, 0, None
 
     # Improve mode: always extract and compare
     if improve and md_path.exists():
@@ -566,8 +630,8 @@ def process_document_worker(
             return result
 
         try:
-            pages, ocr_pages_count, ocr_chars_count = extract_pages()
-            new_markdown = create_markdown(source_path, pages, page_label=page_label)
+            pages, ocr_pages_count, ocr_chars_count, ocr = extract_pages()
+            new_markdown = create_markdown(source_path, pages, page_label=page_label, ocr=ocr)
             new_text = '\n'.join(pages)
 
             existing_markdown = md_path.read_text(encoding='utf-8')
@@ -616,8 +680,8 @@ def process_document_worker(
         return result
 
     try:
-        pages, ocr_pages_count, ocr_chars_count = extract_pages()
-        markdown_content = create_markdown(source_path, pages, page_label=page_label)
+        pages, ocr_pages_count, ocr_chars_count, ocr = extract_pages()
+        markdown_content = create_markdown(source_path, pages, page_label=page_label, ocr=ocr)
         md_path.write_text(markdown_content, encoding='utf-8')
 
         result.md_bytes = len(markdown_content.encode('utf-8'))

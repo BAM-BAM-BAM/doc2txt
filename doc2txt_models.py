@@ -146,6 +146,9 @@ class ProcessingStats:
     ocr_chars: int = 0
     current_file: str = ""
     current_file_pages: int = 0
+    current_file_ocr_engine: str = ""
+    current_file_image_pages: int = 0
+    current_file_ocr_text_pages: int = 0
     current_page: int = 0
     current_status: str = ""
     start_time: float = field(default_factory=time.time)

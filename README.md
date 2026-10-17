@@ -95,11 +95,35 @@ An OCR error fails the document (`FAILED:`); no `.md` is written, and the watche
 
 ## Output Format
 
-Creates a `.md` file alongside each PDF with:
+Creates a `.md` file alongside each document with:
 - Title from filename
-- Source path reference
+- Source path reference (absolute)
+- A line recording what made the file (below)
 - Page separators with page numbers
 - Extracted text content
+
+```
+# invoice
+
+> Source: /mnt/d/OneDrive/Docs/invoice.pdf
+>
+> Made by doc2txt d8cd76e on 2026-10-17 · pymupdf 1.27.2.3 · OCR engine: tesseract · 12 pages, 5 with images, OCR text on 3
+```
+
+| Field | Meaning |
+|-------|---------|
+| `d8cd76e` | git commit of the code that ran (`git rev-parse --short=7 HEAD`); `unknown` if it could not be read, e.g. a copy without `.git` |
+| `2026-10-17` | local date of the conversion |
+| `pymupdf 1.27.2.3` | PDF library version; pymupdf has Tesseract compiled in, so this is also the OCR build |
+| `OCR engine` | engine the extraction used; `none` when OCR was off or unavailable; `, every page` with `--force-ocr` |
+| `12 pages, 5 with images` | OCR runs only on pages with images (or every page with `--force-ocr`) |
+| `OCR text on 3` | pages where OCR produced text |
+
+DOCX, DOC, RTF and ODT outputs end the line after the date.
+
+- **After an OCR or pymupdf upgrade**, an output can change only if it has pages with images or was made with `--force-ocr`.
+- **Outputs without the line** were written before this feature.
+- **Run bulk jobs from main.** Pull requests are squash-merged, so a branch commit never appears on main; the date orders outputs made from branches.
 
 ## Requirements
 
