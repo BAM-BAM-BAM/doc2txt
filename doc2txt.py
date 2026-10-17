@@ -30,6 +30,7 @@ from doc2txt_ocr import (
     resolve_ocr_engine,
 )
 from doc2txt_extractors import (
+    CODE_VERSION,
     find_documents,
     STATUS_IMPROVED,
     STATUS_KEPT,
@@ -613,7 +614,7 @@ def main() -> int:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {__version__}"
+        version=f"%(prog)s {__version__} ({CODE_VERSION})"
     )
     parser.add_argument(
         "path",

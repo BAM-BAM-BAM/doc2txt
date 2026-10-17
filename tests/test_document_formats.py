@@ -232,23 +232,23 @@ class TestQualCreateMarkdown:
 
     def test_qual_default_page_label(self):
         path = Path("/tmp/test.pdf")
-        result = create_markdown(path, ["Page 1", "Page 2"])
+        result = create_markdown(path, ["Page 1", "Page 2"], ocr=("none", False, 0, 0))
         assert "*Page 2*" in result
 
     def test_qual_section_label(self):
         path = Path("/tmp/test.docx")
-        result = create_markdown(path, ["Sec 1", "Sec 2"], page_label="Section")
+        result = create_markdown(path, ["Sec 1", "Sec 2"], page_label="Section", ocr=None)
         assert "*Section 2*" in result
 
     def test_qual_single_section_no_separator(self):
         path = Path("/tmp/test.docx")
-        result = create_markdown(path, ["Only content"], page_label="Section")
+        result = create_markdown(path, ["Only content"], page_label="Section", ocr=None)
         assert "*Section" not in result
         assert "Only content" in result
 
     def test_qual_source_header(self):
         path = Path("/tmp/mydoc.docx")
-        result = create_markdown(path, ["Content"])
+        result = create_markdown(path, ["Content"], ocr=None)
         assert "# mydoc" in result
         assert "> Source: /tmp/mydoc.docx" in result
 

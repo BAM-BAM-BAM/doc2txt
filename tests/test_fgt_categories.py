@@ -78,6 +78,10 @@ def _scan_pdf(path: Path, sideways: bool = False, text_layer: bool = False) -> P
     return path
 
 
+def _made_by(md_path: Path) -> str:
+    return next(line for line in md_path.read_text().splitlines() if line.startswith("> Made by"))
+
+
 class TestInvariants:
     """INV-* tests: domain rules that must always hold."""
 
@@ -144,7 +148,7 @@ class TestInvariants:
         doc.save(str(path))
 
         sections = extract_text(path)
-        md_content = create_markdown(path, sections)
+        md_content = create_markdown(path, sections, ocr=None)
         # The markdown header should reference the original file stem
         assert "my_document" in md_content
 
@@ -648,6 +652,27 @@ class TestBoundary:
         assert process_document(pdf, overwrite=False, dry_run=False, force_ocr=True)[:2] == (True, "Created: typed.md")
         assert "Typed text layer" in pdf.with_suffix(".md").read_text()
 
+    def test_bound_023_code_version_unknown_without_git(self, monkeypatch):
+        """A checkout gives its short commit; no repository or no git binary gives "unknown"."""
+        import re
+        import subprocess
+        import doc2txt_extractors
+
+        assert re.fullmatch(r"[0-9a-f]{7}", doc2txt_extractors.code_version())
+        monkeypatch.setattr(subprocess, "run", lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 128, "", "fatal: not a git repository"))
+        assert doc2txt_extractors.code_version() == "unknown"
+
+        def no_git(*args, **kwargs):
+            raise FileNotFoundError("git")
+
+        def hung_git(args, **kwargs):
+            raise subprocess.TimeoutExpired(args, 5)
+
+        for failure in (no_git, hung_git):
+            monkeypatch.setattr(subprocess, "run", failure)
+            assert doc2txt_extractors.code_version() == "unknown"
+
 
 class TestContract:
     """CONTRACT-* tests: modules that share a definition agree on it."""
@@ -682,6 +707,86 @@ class TestContract:
         assert (cli_exit.value.code, watcher_exit.value.code) == (2, 2)
         with pytest.raises(KeyError):
             doc2txt_ocr.resolve_ocr_engine("bogus")
+
+    def test_contract_provenance_matches_extraction(self, tmp_path, monkeypatch):
+        """Both conversion paths stamp the engine and page counts their extraction loop used."""
+        import doc2txt_extractors
+        import doc2txt_ocr
+        import pymupdf
+        from doc2txt_extractors import process_document, process_document_worker
+        from doc2txt_models import ProcessingStats
+
+        for name, available in (("check_surya_available", False), ("check_paddleocr_available", False),
+                                ("check_tesseract_available", True)):
+            monkeypatch.setattr(doc2txt_ocr, name, lambda available=available: available)
+        engines = []
+
+        def stub(page, ocr_engine, force_ocr, **kwargs):
+            engines.append(ocr_engine)
+            # Page 1: OCR ran and found nothing (as under --force-ocr); page 2: OCR text; page 3: text layer
+            return [("", True, 0, ""), ("OCR WORDS", True, 9, "ocr"), ("plain", False, 0, "")][page.number]
+
+        monkeypatch.setattr(doc2txt_extractors, "extract_page_text", stub)
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40), False)
+        pix.clear_with(200)
+        doc = pymupdf.open()
+        for n in range(3):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"text {n}")
+            if n < 2:
+                page.insert_image(pymupdf.Rect(100, 100, 200, 200), pixmap=pix)
+        pdf = tmp_path / "three.pdf"
+        doc.save(pdf)
+        md = pdf.with_suffix(".md")
+
+        assert process_document(pdf, overwrite=True, dry_run=False)[0]
+        line = _made_by(md)
+        assert set(engines) == {"tesseract"}
+        assert line.endswith("· OCR engine: tesseract · 3 pages, 2 with images, OCR text on 1")
+        assert process_document_worker(pdf, True, False, True, "auto", False, False).success
+        assert _made_by(md) == line
+        stats = ProcessingStats()
+        for _ in range(2):
+            assert process_document(pdf, overwrite=True, dry_run=False, stats=stats)[0]
+            assert _made_by(md) == line
+
+        import docx
+        import re
+        note = tmp_path / "note.docx"
+        word = docx.Document()
+        word.add_paragraph("after a PDF")
+        word.save(str(note))
+        assert process_document(note, overwrite=True, dry_run=False, stats=stats)[0]
+        assert re.fullmatch(r"> Made by doc2txt ([0-9a-f]{7}|unknown) on \d{4}-\d{2}-\d{2}", _made_by(note.with_suffix(".md")))
+
+
+class TestSchema:
+    """SCHEMA-* tests: outputs have their required shape."""
+
+    def test_schema_markdown_provenance_line(self, tmp_path, monkeypatch):
+        """Each output's header names its absolute source, the code, the date and, for a PDF, its OCR facts."""
+        import re
+        from doc2txt_quality import strip_markdown_metadata
+
+        monkeypatch.chdir(tmp_path)
+        made_by = r"> Made by doc2txt ([0-9a-f]{7}|unknown) on \d{4}-\d{2}-\d{2}"
+        pdf_cases = [
+            (("tesseract", False, 2, 1), "OCR engine: tesseract · 3 pages, 2 with images, OCR text on 1"),
+            (("tesseract", True, 2, 3), "OCR engine: tesseract, every page · 3 pages, 2 with images, OCR text on 3"),
+            (("none", False, 2, 0), "OCR engine: none · 3 pages, 2 with images, OCR text on 0"),
+            (("none", True, 2, 0), "OCR engine: none · 3 pages, 2 with images, OCR text on 0"),
+        ]
+        for ocr, ending in pdf_cases:
+            md = create_markdown(Path("scan.pdf"), ["one", "two", "three"], ocr=ocr)
+            lines = md.splitlines()
+            assert lines[:3] == ["# scan", "", f"> Source: {Path.cwd() / 'scan.pdf'}"]
+            assert lines[3] == ">"
+            assert re.fullmatch(made_by + r" · pymupdf [\d.]+ · " + re.escape(ending), lines[4]), lines[4]
+            assert lines[5:7] == ["", "---"]
+            without = "\n".join(lines[:3] + lines[5:])
+            assert strip_markdown_metadata(md) == strip_markdown_metadata(without)
+        docx_line = create_markdown(Path("note.docx"), ["x"], page_label="Section", ocr=None).splitlines()[4]
+        assert re.fullmatch(made_by, docx_line), docx_line
 
 
 class TestIntegration:

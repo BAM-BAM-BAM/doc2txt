@@ -108,11 +108,11 @@ class TextQualityScorer:
 
 
 def strip_markdown_metadata(md_text: str) -> str:
-    """Remove title, source line, and page markers from markdown for fair comparison."""
+    """Remove title, header lines, and page markers from markdown for fair comparison."""
     lines = md_text.split('\n')
     content_lines = []
     for line in lines:
-        # Skip: # Title, > Source:, ---, *Page N*
+        # Skip: # Title, every > header line (Source, Made by), ---, *Page N*
         stripped = line.strip()
         if stripped.startswith('#'):
             continue
